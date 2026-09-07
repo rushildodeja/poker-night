@@ -1,0 +1,26 @@
+name: Poker Night Full Verification
+
+on:
+  push:
+    branches: [verification/full-system-2026-09-07]
+
+jobs:
+  full-verification:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable pnpm
+        run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install workspace dependencies
+        run: pnpm install --no-frozen-lockfile
+      - name: Typecheck all packages
+        run: pnpm -r typecheck
+      - name: Run poker engine tests
+        run: pnpm --filter @poker-night/poker-engine test
+      - name: Run game server tests
+        run: pnpm --filter @poker-night/game-server test
+      - name: Run 10,000-hand simulation stress test
+        run: pnpm --filter @poker-night/poker-engine test:stress

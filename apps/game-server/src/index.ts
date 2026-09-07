@@ -41,7 +41,7 @@ server.on('connection', (socket, request) => {
 
   const connectionId = randomUUID();
   const provisionalSessionId = randomUUID();
-  let sessionId = provisionalSessionId;
+  let sessionId: string = provisionalSessionId;
   let active = false;
   sessions.createPending(provisionalSessionId, playerId, connectionId);
   const connection = { id: connectionId, playerId, send: (message: string) => { if (socket.readyState === socket.OPEN) socket.send(message); }, close: (code?: number, reason?: string) => socket.close(code, reason) };

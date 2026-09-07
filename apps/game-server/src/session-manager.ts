@@ -13,6 +13,23 @@ export class SessionManager {
   private readonly sessions = new Map<string, Session>();
   private readonly byPlayer = new Map<string, string>();
 
+  createPending(sessionId: string, playerId: string, connectionId: string, now = Date.now()): Session {
+    this.prune(now);
+    const session: Session = { sessionId, playerId, connectionId, connectedAt: now, lastSeenAt: now };
+    this.sessions.set(sessionId, session);
+    return session;
+  }
+
+  activate(sessionId: string, now = Date.now()): Session | null {
+    this.prune(now);
+    const current = this.sessions.get(sessionId);
+    if (!current) return null;
+    const previous = this.byPlayer.get(current.playerId);
+    if (previous && previous !== sessionId) this.sessions.delete(previous);
+    this.byPlayer.set(current.playerId, sessionId);
+    return current;
+  }
+
   attachNew(sessionId: string, playerId: string, connectionId: string, now = Date.now()): Session {
     this.prune(now);
     const previous = this.byPlayer.get(playerId);
@@ -23,7 +40,6 @@ export class SessionManager {
     return session;
   }
 
-  /** Backwards-compatible alias for creating a fresh session. */
   attach(sessionId: string, playerId: string, connectionId: string, now = Date.now()): Session {
     return this.attachNew(sessionId, playerId, connectionId, now);
   }
@@ -32,6 +48,8 @@ export class SessionManager {
     this.prune(now);
     const current = this.sessions.get(sessionId);
     if (!current || current.playerId !== playerId) return null;
+    const previousSessionId = this.byPlayer.get(playerId);
+    if (previousSessionId && previousSessionId !== sessionId) this.sessions.delete(previousSessionId);
     const previousConnectionId = current.connectionId;
     const resumed: Session = { ...current, connectionId, lastSeenAt: now };
     this.sessions.set(sessionId, resumed);
@@ -72,7 +90,7 @@ export class SessionManager {
     const current = this.sessions.get(sessionId);
     if (!current) return null;
     this.sessions.delete(sessionId);
-    if (this.byPlayer.get(current.playerId) === sessionId) this.byPlayer.delete(sessionId);
+    if (this.byPlayer.get(current.playerId) === sessionId) this.byPlayer.delete(current.playerId);
     return current;
   }
 

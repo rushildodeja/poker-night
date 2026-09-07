@@ -3,50 +3,9 @@ import { PokerTable } from '@poker-night/poker-engine';
 import { TableRuntime } from '../src/table-runtime.js';
 
 describe('TableRuntime', () => {
-  const setup = (tableId: string) => {
-    const table = new PokerTable(tableId, 50, 100, 2);
-    table.seatPlayer('p1', 0, 1000);
-    table.seatPlayer('p2', 1, 1000);
-    table.startHand();
-    return { table, runtime: new TableRuntime(table), handId: table.state.handId! };
-  };
-
-  it('binds actions to the authenticated player and rejects duplicates', async () => {
-    const { table, runtime, handId } = setup('test');
-    const actor = table.state.currentPlayerId!;
-    const accepted = await runtime.apply({ requestId: 'req-1', authenticatedPlayerId: actor, tableId: 'test', handId, action: 'FOLD', expectedSequence: 0 });
-    expect('type' in accepted).toBe(true);
-    expect(runtime.snapshot().sequence).toBe(1);
-
-    const duplicate = await runtime.apply({ requestId: 'req-1', authenticatedPlayerId: actor, tableId: 'test', handId, action: 'FOLD', expectedSequence: 1 });
-    expect('code' in duplicate && duplicate.code).toBe('DUPLICATE_REQUEST');
-  });
-
-  it('rejects a player that is not seated without mutating the table', async () => {
-    const { table, runtime, handId } = setup('test-2');
-    const before = runtime.snapshot();
-    const result = await runtime.apply({ requestId: 'req-x', authenticatedPlayerId: 'intruder', tableId: 'test-2', handId, action: 'FOLD', expectedSequence: 0 });
-    expect('code' in result && result.code).toBe('PLAYER_NOT_SEATED');
-    expect(runtime.snapshot()).toEqual(before);
-  });
-
-  it('rejects stale optimistic-concurrency sequence', async () => {
-    const { table, runtime, handId } = setup('test-3');
-    const actor = table.state.currentPlayerId!;
-    await runtime.apply({ requestId: 'req-1', authenticatedPlayerId: actor, tableId: 'test-3', handId, action: 'FOLD', expectedSequence: 0 });
-    const result = await runtime.apply({ requestId: 'req-2', authenticatedPlayerId: actor, tableId: 'test-3', handId, action: 'FOLD', expectedSequence: 0 });
-    expect('code' in result && result.code).toBe('STALE_SEQUENCE');
-  });
-
-  it('serializes concurrent commands and accepts at most one mutation', async () => {
-    const { table, runtime, handId } = setup('test-4');
-    const actor = table.state.currentPlayerId!;
-    const results = await Promise.all([
-      runtime.apply({ requestId: 'req-a', authenticatedPlayerId: actor, tableId: 'test-4', handId, action: 'FOLD', expectedSequence: 0 }),
-      runtime.apply({ requestId: 'req-b', authenticatedPlayerId: actor, tableId: 'test-4', handId, action: 'FOLD', expectedSequence: 0 }),
-    ]);
-    expect(results.filter((result) => 'type' in result)).toHaveLength(1);
-    expect(results.filter((result) => 'code' in result && result.code === 'STALE_SEQUENCE')).toHaveLength(1);
-    expect(runtime.snapshot().sequence).toBe(1);
-  });
+  const setup = (tableId: string) => { const table = new PokerTable(tableId, 50, 100, 2); table.seatPlayer('p1', 0, 1000); table.seatPlayer('p2', 1, 1000); table.startHand(); return { table, runtime: new TableRuntime(table), handId: table.state.handId! }; };
+  it('binds actions to the authenticated player and rejects duplicates', async () => { const { table, runtime, handId } = setup('test'); const actor = table.state.currentPlayerId!; const accepted = await runtime.apply({ requestId: 'req-1', authenticatedPlayerId: actor, tableId: 'test', handId, action: 'FOLD', expectedSequence: 0 }); expect('type' in accepted).toBe(true); expect(runtime.snapshot().sequence).toBe(1); const duplicate = await runtime.apply({ requestId: 'req-1', authenticatedPlayerId: actor, tableId: 'test', handId, action: 'FOLD', expectedSequence: 1 }); expect('code' in duplicate && duplicate.code).toBe('DUPLICATE_REQUEST'); });
+  it('rejects a player that is not seated without mutating the table', async () => { const { runtime, handId } = setup('test-2'); const before = runtime.snapshot(); const result = await runtime.apply({ requestId: 'req-x', authenticatedPlayerId: 'intruder', tableId: 'test-2', handId, action: 'FOLD', expectedSequence: 0 }); expect('code' in result && result.code).toBe('PLAYER_NOT_SEATED'); expect(runtime.snapshot()).toEqual(before); });
+  it('rejects stale optimistic-concurrency sequence', async () => { const { table, runtime, handId } = setup('test-3'); const actor = table.state.currentPlayerId!; await runtime.apply({ requestId: 'req-1', authenticatedPlayerId: actor, tableId: 'test-3', handId, action: 'FOLD', expectedSequence: 0 }); const result = await runtime.apply({ requestId: 'req-2', authenticatedPlayerId: actor, tableId: 'test-3', handId, action: 'FOLD', expectedSequence: 0 }); expect('code' in result && result.code).toBe('STALE_SEQUENCE'); });
+  it('serializes concurrent commands and accepts at most one mutation', async () => { const { table, runtime, handId } = setup('test-4'); const actor = table.state.currentPlayerId!; const results = await Promise.all([runtime.apply({ requestId: 'req-a', authenticatedPlayerId: actor, tableId: 'test-4', handId, action: 'FOLD', expectedSequence: 0 }), runtime.apply({ requestId: 'req-b', authenticatedPlayerId: actor, tableId: 'test-4', handId, action: 'FOLD', expectedSequence: 0 })]); expect(results.filter((result) => 'type' in result)).toHaveLength(1); expect(results.filter((result) => 'code' in result && result.code === 'STALE_SEQUENCE')).toHaveLength(1); expect(runtime.snapshot().sequence).toBe(1); });
 });

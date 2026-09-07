@@ -5,3 +5,6 @@ export * from './pots/side-pots.js';
 export * from './table/types.js';
 export * from './table/table.js';
 export * from './table/settlement.js';
+export * from './simulation/prng.js';
+export * from './simulation/invariants.js';
+export * from './simulation/simulator.js';

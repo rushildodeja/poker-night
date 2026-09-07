@@ -3,6 +3,12 @@ import { buildPots } from '../pots/side-pots.js';
 import { settle } from './settlement.js';
 import type { Action, PlayerState, TableEvent, TableState } from './types.js';
 
+export type PokerTableCheckpoint = Readonly<{
+  state: TableState;
+  remainingDeck: ReturnType<Deck['remainingCards']>;
+  handSequence: number;
+}>;
+
 export class PokerTable {
   readonly state: TableState;
   private deck: Deck | null = null;
@@ -23,6 +29,19 @@ export class PokerTable {
     this.state = { tableId, handId: null, maxPlayers, players: [], dealerButton: -1, smallBlind, bigBlind, communityCards: [], street: 'WAITING', currentPlayerId: null, currentBet: 0, minRaise: bigBlind, pots: [], actionDeadline: null, winners: [], events: [] };
   }
 
+  static fromCheckpoint(checkpoint: PokerTableCheckpoint, random: RandomSource = new CryptoRandom()): PokerTable {
+    const s = checkpoint.state;
+    const table = new PokerTable(s.tableId, s.smallBlind, s.bigBlind, s.maxPlayers, random);
+    Object.assign(table.state, structuredClone(s));
+    table.handSequence = checkpoint.handSequence;
+    table.deck = checkpoint.remainingDeck.length ? Deck.fromRemaining(checkpoint.remainingDeck) : null;
+    return table;
+  }
+
+  checkpoint(): PokerTableCheckpoint {
+    return { state: structuredClone(this.state), remainingDeck: this.deck?.remainingCards() ?? [], handSequence: this.handSequence };
+  }
+
   seatPlayer(playerId: string, seat: number, stack: number): void {
     if (this.state.street !== 'WAITING' && this.state.street !== 'HAND_COMPLETE') throw new Error('Cannot seat during a hand');
     if (!playerId.trim()) throw new Error('Player id is required');
@@ -31,6 +50,7 @@ export class PokerTable {
     if (!Number.isInteger(seat) || seat < 0 || seat >= this.state.maxPlayers || !Number.isInteger(stack) || stack < 0) throw new Error('Invalid seat or stack');
     this.state.players.push({ playerId, seat, stack, holeCards: [], currentBet: 0, totalContribution: 0, status: 'WAITING', hasActed: false, canRaise: true });
     this.state.players.sort((a, b) => a.seat - b.seat);
+    this.recordEvent({ type: 'PLAYER_SEATED', playerId });
   }
 
   startHand(): void {
@@ -41,7 +61,8 @@ export class PokerTable {
     this.state.handId = `${this.state.tableId}-${this.handSequence}`;
     this.state.street = 'PRE_FLOP'; this.state.communityCards = []; this.state.currentBet = 0; this.state.minRaise = this.state.bigBlind;
     this.state.pots = []; this.state.winners = []; this.state.actionDeadline = null; this.deck = Deck.standard().shuffle(this.random);
-    this.state.dealerButton = this.nextFundedSeat(this.state.dealerButton);
+    const previousButton = this.state.dealerButton;
+    this.state.dealerButton = this.nextFundedSeat(previousButton);
     for (const player of this.state.players) { player.holeCards = []; player.currentBet = 0; player.totalContribution = 0; player.hasActed = false; player.canRaise = true; player.status = player.stack > 0 ? 'ACTIVE' : 'OUT'; }
     const active = this.activePlayers();
     const smallBlindPlayer = this.nextActive(this.state.dealerButton);
@@ -107,68 +128,15 @@ export class PokerTable {
     }
   }
 
-  private putChips(player: PlayerState, amount: number): void {
-    if (!Number.isInteger(amount) || amount < 0 || amount > player.stack) throw new Error('Invalid chip amount');
-    player.stack -= amount; player.currentBet += amount; player.totalContribution += amount;
-    if (player.stack === 0) player.status = 'ALL_IN';
-  }
-
+  private putChips(player: PlayerState, amount: number): void { if (!Number.isInteger(amount) || amount < 0 || amount > player.stack) throw new Error('Invalid chip amount'); player.stack -= amount; player.currentBet += amount; player.totalContribution += amount; if (player.stack === 0) player.status = 'ALL_IN'; }
   private postBlind(player: PlayerState, blind: number): void { this.putChips(player, Math.min(blind, player.stack)); }
-
-  private advanceOrNext(): void {
-    if (this.livePlayers().length <= 1) { this.awardUncontested(); return; }
-    const actionable = this.actionablePlayers();
-    if (actionable.length === 0) { this.runoutToShowdown(); return; }
-    const bettingRoundComplete = actionable.every((player) => player.hasActed && player.currentBet === this.state.currentBet);
-    if (bettingRoundComplete) { this.dealNextStreet(); return; }
-    this.state.currentPlayerId = this.nextActionableId(this.playerSeat(this.state.currentPlayerId));
-    if (this.state.currentPlayerId === null) this.runoutToShowdown();
-  }
-
-  private dealNextStreet(): void {
-    if (!this.deck) throw new Error('No deck');
-    for (const player of this.state.players) { if (player.status === 'ACTIVE') { player.hasActed = false; player.canRaise = true; } player.currentBet = 0; }
-    this.state.currentBet = 0; this.state.minRaise = this.state.bigBlind;
-    if (this.state.street === 'PRE_FLOP') { this.deck.draw(1); this.state.communityCards.push(...this.deck.draw(3)); this.state.street = 'FLOP'; this.recordEvent({ type: 'FLOP_DEALT' }); }
-    else if (this.state.street === 'FLOP') { this.deck.draw(1); this.state.communityCards.push(...this.deck.draw(1)); this.state.street = 'TURN'; this.recordEvent({ type: 'TURN_DEALT' }); }
-    else if (this.state.street === 'TURN') { this.deck.draw(1); this.state.communityCards.push(...this.deck.draw(1)); this.state.street = 'RIVER'; this.recordEvent({ type: 'RIVER_DEALT' }); }
-    else if (this.state.street === 'RIVER') { this.state.street = 'SHOWDOWN'; this.state.currentPlayerId = null; this.showdownAndSettle(); return; }
-    else throw new Error('Cannot deal the next street from the current state');
-    this.state.currentPlayerId = this.nextActionableId(this.state.dealerButton);
-  }
-
-  private runoutToShowdown(): void {
-    while (this.state.street !== 'RIVER' && this.state.street !== 'SHOWDOWN') this.dealNextStreet();
-    if (this.state.street === 'RIVER') this.dealNextStreet();
-    if (this.state.street === 'SHOWDOWN') this.showdownAndSettle();
-  }
-
-  private showdownAndSettle(): void {
-    this.state.street = 'SHOWDOWN'; this.state.currentPlayerId = null; this.state.pots = this.buildCurrentPots(); this.recordEvent({ type: 'SHOWDOWN' });
-    this.state.street = 'SETTLEMENT';
-    const winners = settle(this.state.players, this.state.communityCards, this.state.dealerButton); this.state.winners = winners;
-    for (const winner of winners) { const player = this.state.players.find((p) => p.playerId === winner.playerId); if (player) player.stack += winner.amount; }
-    this.recordEvent({ type: 'POT_SETTLED' }); this.state.street = 'HAND_COMPLETE'; this.state.currentPlayerId = null; this.recordEvent({ type: 'HAND_COMPLETED' });
-  }
-
-  private awardUncontested(): void {
-    const winner = this.livePlayers()[0]; if (!winner) throw new Error('Cannot settle a hand without a live player');
-    this.state.pots = this.buildCurrentPots(); const amount = this.state.players.reduce((sum, player) => sum + player.totalContribution, 0);
-    winner.stack += amount; this.state.winners = [{ playerId: winner.playerId, amount, category: 'UNCONTESTED' }]; this.state.street = 'SETTLEMENT'; this.state.currentPlayerId = null;
-    this.recordEvent({ type: 'POT_SETTLED', playerId: winner.playerId, amount }); this.state.street = 'HAND_COMPLETE'; this.recordEvent({ type: 'HAND_COMPLETED', playerId: winner.playerId, amount });
-  }
-
-  private buildCurrentPots(): TableState['pots'] { return buildPots(this.state.players.map((player) => ({ playerId: player.playerId, amount: player.totalContribution, folded: player.status === 'FOLDED' }))); }
-
-  private dealHoleCards(players: PlayerState[]): void {
-    if (!this.deck) throw new Error('No deck');
-    const ordered = [...players].sort((a, b) => a.seat - b.seat);
-    const first = this.nextActive(this.state.dealerButton);
-    const start = ordered.findIndex((player) => player.playerId === first.playerId);
-    if (start < 0) throw new Error('Unable to determine dealing order');
-    for (let round = 0; round < 2; round += 1) for (let offset = 0; offset < ordered.length; offset += 1) ordered[(start + offset) % ordered.length]!.holeCards.push(...this.deck.draw(1));
-  }
-
+  private advanceOrNext(): void { if (this.livePlayers().length <= 1) { this.awardUncontested(); return; } const actionable = this.actionablePlayers(); if (actionable.length === 0) { this.runoutToShowdown(); return; } const bettingRoundComplete = actionable.every((player) => player.hasActed && player.currentBet === this.state.currentBet); if (bettingRoundComplete) { this.dealNextStreet(); return; } this.state.currentPlayerId = this.nextActionableId(this.playerSeat(this.state.currentPlayerId)); if (this.state.currentPlayerId === null) this.runoutToShowdown(); }
+  private dealNextStreet(): void { if (!this.deck) throw new Error('No deck'); for (const player of this.state.players) { if (player.status === 'ACTIVE') { player.hasActed = false; player.canRaise = true; } player.currentBet = 0; } this.state.currentBet = 0; this.state.minRaise = this.state.bigBlind; if (this.state.street === 'PRE_FLOP') { this.deck.draw(1); this.state.communityCards.push(...this.deck.draw(3)); this.state.street = 'FLOP'; this.recordEvent({ type: 'FLOP_DEALT' }); } else if (this.state.street === 'FLOP') { this.deck.draw(1); this.state.communityCards.push(...this.deck.draw(1)); this.state.street = 'TURN'; this.recordEvent({ type: 'TURN_DEALT' }); } else if (this.state.street === 'TURN') { this.deck.draw(1); this.state.communityCards.push(...this.deck.draw(1)); this.state.street = 'RIVER'; this.recordEvent({ type: 'RIVER_DEALT' }); } else if (this.state.street === 'RIVER') { this.state.street = 'SHOWDOWN'; this.state.currentPlayerId = null; this.showdownAndSettle(); return; } else throw new Error('Cannot deal the next street from the current state'); this.state.currentPlayerId = this.nextActionableId(this.state.dealerButton); }
+  private runoutToShowdown(): void { while (this.state.street !== 'RIVER' && this.state.street !== 'SHOWDOWN') this.dealNextStreet(); if (this.state.street === 'RIVER') this.dealNextStreet(); if (this.state.street === 'SHOWDOWN') this.showdownAndSettle(); }
+  private showdownAndSettle(): void { this.state.street = 'SHOWDOWN'; this.state.currentPlayerId = null; this.state.pots = this.buildCurrentPots(); this.recordEvent({ type: 'SHOWDOWN' }); this.state.street = 'SETTLEMENT'; const winners = settle(this.state.players, this.state.communityCards, this.state.dealerButton); this.state.winners = winners; for (const winner of winners) { const player = this.state.players.find((p) => p.playerId === winner.playerId); if (player) player.stack += winner.amount; } this.recordEvent({ type: 'POT_SETTLED' }); this.state.street = 'HAND_COMPLETE'; this.state.currentPlayerId = null; this.recordEvent({ type: 'HAND_COMPLETED' }); }
+  private awardUncontested(): void { const winner = this.livePlayers()[0]; if (!winner) throw new Error('Cannot settle a hand without a live player'); this.state.pots = this.buildCurrentPots(); const amount = this.state.players.reduce((sum, player) => sum + player.totalContribution, 0); winner.stack += amount; this.state.winners = [{ playerId: winner.playerId, amount, category: 'UNCONTESTED' }]; this.state.street = 'SETTLEMENT'; this.state.currentPlayerId = null; this.recordEvent({ type: 'POT_SETTLED', playerId: winner.playerId, amount }); this.state.street = 'HAND_COMPLETE'; this.recordEvent({ type: 'HAND_COMPLETED', playerId: winner.playerId, amount }); }
+  private buildCurrentPots(): TableState['pots'] { return buildPots(this.state.players.map((player) => ({ playerId: player.playerId, amount: player.totalContribution, folded: player.status === 'FOLDED' })) ); }
+  private dealHoleCards(players: PlayerState[]): void { if (!this.deck) throw new Error('No deck'); const ordered = [...players].sort((a, b) => a.seat - b.seat); const first = this.nextActive(this.state.dealerButton); const start = ordered.findIndex((player) => player.playerId === first.playerId); if (start < 0) throw new Error('Unable to determine dealing order'); for (let round = 0; round < 2; round += 1) for (let offset = 0; offset < ordered.length; offset += 1) ordered[(start + offset) % ordered.length]!.holeCards.push(...this.deck.draw(1)); }
   private activePlayers(): PlayerState[] { return this.state.players.filter((p) => p.status !== 'OUT' && p.status !== 'FOLDED'); }
   private livePlayers(): PlayerState[] { return this.activePlayers(); }
   private actionablePlayers(): PlayerState[] { return this.state.players.filter((p) => p.status === 'ACTIVE'); }

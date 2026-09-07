@@ -40,7 +40,7 @@ export function assertTableInvariant(state: TableState, expectedChipTotal: numbe
   if (state.street === 'FLOP') assert(state.communityCards.length === 3, 'Unexpected community-card count in FLOP');
   if (state.street === 'TURN') assert(state.communityCards.length === 4, 'Unexpected community-card count in TURN');
   if (state.street === 'RIVER' || state.street === 'SHOWDOWN' || state.street === 'SETTLEMENT') assert(state.communityCards.length === 5, `Unexpected community-card count in ${state.street}`);
-  if (state.street === 'HAND_COMPLETE') assert(state.communityCards.length === 0 || state.communityCards.length === 5, 'Unexpected community-card count in HAND_COMPLETE');
+  if (state.street === 'HAND_COMPLETE') assert([0, 3, 4, 5].includes(state.communityCards.length), `Unexpected community-card count in HAND_COMPLETE: ${state.communityCards.length}`);
   if (state.street === 'PRE_FLOP' || state.street === 'STARTING') assert(state.communityCards.length === 0, `Unexpected community-card count in ${state.street}`);
 
   const contributionTotal = state.players.reduce((sum, player) => sum + player.totalContribution, 0);

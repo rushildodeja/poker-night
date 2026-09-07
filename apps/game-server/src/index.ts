@@ -67,7 +67,7 @@ server.on('connection', (socket, request) => {
       let create;
       try { create = parseClientCreateTableRequest(requestPayload); } catch (error) { sendError(socket, 'BAD_REQUEST', error instanceof Error ? error.message : 'Invalid create request'); return; }
       const created = await lifecycle.create(create, playerId);
-      if ('ok' in created && !created.ok) { sendError(socket, created.code, created.message, create.requestId); return; }
+      if (!created.ok) { sendError(socket, created.code, created.message, create.requestId); return; }
       const runtime = created.runtime;
       send(socket, { type: 'TABLE_CREATED', protocolVersion: 1, sequence: runtime.getSequence(), payload: { type: 'TABLE_CREATED', protocolVersion: 1, tableId: created.tableId, sequence: runtime.getSequence() } });
       timeoutCoordinator.arm(runtime); send(socket, { type: 'TABLE_SNAPSHOT', protocolVersion: 1, sequence: runtime.getSequence(), payload: runtime.privateSnapshot(playerId) }); return;

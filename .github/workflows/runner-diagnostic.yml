@@ -1,0 +1,20 @@
+name: Runner Diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  runner-diagnostic:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Verify runner
+        run: |
+          echo "GitHub-hosted runner started successfully"
+          echo "Runner OS: $RUNNER_OS"
+          echo "Runner name: $RUNNER_NAME"
+          node --version
+          npm --version

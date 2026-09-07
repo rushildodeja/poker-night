@@ -39,7 +39,6 @@ const timeoutCoordinator = new ActionTimeoutCoordinator(timers, (runtime, result
 server.on('connection', (socket, request) => {
   const playerId = authenticator.authenticate(request as { headers: Record<string, string | string[] | undefined> });
   if (!playerId) { sendError(socket, 'UNAUTHORIZED', 'Authentication required'); socket.close(1008, 'Authentication required'); return; }
-
   const connectionId = randomUUID();
   const provisionalSessionId = randomUUID();
   const guard = new ConnectionGuard({ maxMessagesPerWindow: Number(process.env.MAX_MESSAGES_PER_SECOND ?? 40), windowMs: 1000 });
@@ -55,17 +54,14 @@ server.on('connection', (socket, request) => {
     sessions.touch(sessionId);
     let requestPayload: unknown;
     try { requestPayload = JSON.parse(raw.toString()); } catch { sendError(socket, 'BAD_REQUEST', 'Message must be valid JSON'); return; }
-
     if (!active) {
       if (!sessions.activate(sessionId)) { sendError(socket, 'INVALID_SESSION', 'Session is no longer valid'); socket.close(1008, 'Invalid session'); return; }
       active = true;
     }
-
     const type = requestPayload && typeof requestPayload === 'object' ? (requestPayload as Record<string, unknown>).type : undefined;
     if (type === 'LIST_TABLES') {
       try { parseClientListTablesRequest(requestPayload); } catch (error) { sendError(socket, 'BAD_REQUEST', error instanceof Error ? error.message : 'Invalid list request'); return; }
-      send(socket, { type: 'TABLE_LIST', protocolVersion: 1, sequence: 0, payload: { type: 'TABLE_LIST', protocolVersion: 1, tables: lifecycle.list() } });
-      return;
+      send(socket, { type: 'TABLE_LIST', protocolVersion: 1, sequence: 0, payload: { type: 'TABLE_LIST', protocolVersion: 1, tables: lifecycle.list() } }); return;
     }
     if (type === 'CREATE_TABLE') {
       let create;
@@ -74,21 +70,15 @@ server.on('connection', (socket, request) => {
       if ('ok' in created && !created.ok) { sendError(socket, created.code, created.message, create.requestId); return; }
       const runtime = created.runtime;
       send(socket, { type: 'TABLE_CREATED', protocolVersion: 1, sequence: runtime.getSequence(), payload: { type: 'TABLE_CREATED', protocolVersion: 1, tableId: created.tableId, sequence: runtime.getSequence() } });
-      timeoutCoordinator.arm(runtime);
-      send(socket, { type: 'TABLE_SNAPSHOT', protocolVersion: 1, sequence: runtime.getSequence(), payload: runtime.privateSnapshot(playerId) });
-      return;
+      timeoutCoordinator.arm(runtime); send(socket, { type: 'TABLE_SNAPSHOT', protocolVersion: 1, sequence: runtime.getSequence(), payload: runtime.privateSnapshot(playerId) }); return;
     }
     if (type === 'JOIN_TABLE') {
       let join;
       try { join = parseClientJoinTableRequest(requestPayload); } catch (error) { sendError(socket, 'BAD_REQUEST', error instanceof Error ? error.message : 'Invalid join request'); return; }
       const result = await lifecycle.join(join, playerId);
       if (!result.ok) { sendError(socket, result.code, result.message, join.requestId); return; }
-      timeoutCoordinator.arm(result.runtime);
-      send(socket, { type: 'TABLE_JOINED', protocolVersion: 1, sequence: result.runtime.getSequence(), payload: result.response });
-      broadcastRuntime(result.runtime);
-      return;
+      timeoutCoordinator.arm(result.runtime); send(socket, { type: 'TABLE_JOINED', protocolVersion: 1, sequence: result.runtime.getSequence(), payload: result.response }); broadcastRuntime(result.runtime); return;
     }
-
     if (type === 'RESUME') {
       let resume;
       try { resume = parseClientResumeRequest(requestPayload); } catch (error) { sendError(socket, 'BAD_REQUEST', error instanceof Error ? error.message : 'Invalid resume request'); return; }
@@ -96,17 +86,13 @@ server.on('connection', (socket, request) => {
       if (!table || !runtime) { sendError(socket, 'TABLE_NOT_FOUND', 'Table not found'); return; }
       const result = sessions.resume(resume.sessionId, playerId, connectionId);
       if (!result) { sendError(socket, 'INVALID_SESSION', 'Session is invalid, expired, or belongs to another player'); return; }
-      if (sessionId !== resume.sessionId) sessions.discard(sessionId);
-      sessionId = resume.sessionId; active = true;
+      if (sessionId !== resume.sessionId) sessions.discard(sessionId); sessionId = resume.sessionId; active = true;
       if (result.previousConnectionId && result.previousConnectionId !== connectionId) connections.get(result.previousConnectionId)?.close(4001, 'Session resumed on another connection');
-      await runtime.ensureActionDeadlinePersisted(); timeoutCoordinator.arm(runtime);
-      const sequence = runtime.getSequence();
+      await runtime.ensureActionDeadlinePersisted(); timeoutCoordinator.arm(runtime); const sequence = runtime.getSequence();
       send(socket, { type: 'RESUME_ACCEPTED', protocolVersion: 1, sequence, payload: { type: 'RESUME_ACCEPTED', protocolVersion: 1, sessionId, playerId, tableId: resume.tableId, sequence, staleClient: resume.lastSequence !== sequence } });
       if (!table.state.players.some((player) => player.playerId === playerId)) { sendError(socket, 'PLAYER_NOT_SEATED', 'Player is no longer seated at this table', undefined, sequence); return; }
-      send(socket, { type: 'TABLE_SNAPSHOT', protocolVersion: 1, sequence, payload: toPrivateSnapshot(table.state, sequence, playerId) });
-      return;
+      send(socket, { type: 'TABLE_SNAPSHOT', protocolVersion: 1, sequence, payload: toPrivateSnapshot(table.state, sequence, playerId) }); return;
     }
-
     let parsed;
     try { parsed = parseClientActionRequest(requestPayload); } catch (error) { sendError(socket, 'BAD_REQUEST', error instanceof Error ? error.message : 'Invalid request'); return; }
     const command = { ...parsed, authenticatedPlayerId: playerId };
@@ -114,11 +100,8 @@ server.on('connection', (socket, request) => {
     if (!table || !runtime) { sendError(socket, 'TABLE_NOT_FOUND', 'Table not found', command.requestId); return; }
     const result = await runtime.apply(command);
     if ('code' in result) { sendError(socket, result.code, result.message, result.requestId, runtime.getSequence()); return; }
-    timeoutCoordinator.arm(runtime);
-    send(socket, { type: 'ACTION_ACCEPTED', protocolVersion: 1, sequence: result.sequence, payload: result });
-    broadcastRuntime(runtime);
+    timeoutCoordinator.arm(runtime); send(socket, { type: 'ACTION_ACCEPTED', protocolVersion: 1, sequence: result.sequence, payload: result }); broadcastRuntime(runtime);
   });
-
   const detach = () => { connections.remove(connectionId); sessions.disconnect(sessionId, connectionId); };
   socket.on('close', detach); socket.on('error', detach);
 });
@@ -126,16 +109,10 @@ server.on('connection', (socket, request) => {
 async function bootstrap(): Promise<void> {
   if (store) {
     const checkpoints = await store.listCheckpoints();
-    for (const record of checkpoints) {
-      const runtime = await TableRuntime.recover(store, record.tableId);
-      if (!runtime) continue;
-      await runtime.ensureActionDeadlinePersisted(); tables.register(runtime.table); runtimes.set(record.tableId, runtime); timeoutCoordinator.arm(runtime);
-    }
+    for (const record of checkpoints) { const runtime = await TableRuntime.recover(store, record.tableId); if (!runtime) continue; await runtime.ensureActionDeadlinePersisted(); tables.register(runtime.table); runtimes.set(record.tableId, runtime); timeoutCoordinator.arm(runtime); }
     console.log(`Recovered ${runtimes.size} persisted table(s)`);
   } else {
-    const demo = tables.create('dev-table', 50, 100, 9);
-    demo.seatPlayer('demo-1', 0, 10000); demo.seatPlayer('demo-2', 1, 10000); demo.startHand();
-    const runtime = new TableRuntime(demo); runtimes.set(demo.state.tableId, runtime); timeoutCoordinator.arm(runtime);
+    const demo = tables.create('dev-table', 50, 100, 9); demo.seatPlayer('demo-1', 0, 10000); demo.seatPlayer('demo-2', 1, 10000); demo.startHand(); const runtime = new TableRuntime(demo); runtimes.set(demo.state.tableId, runtime); timeoutCoordinator.arm(runtime);
   }
   console.log(`Poker Night game server listening on :${port}`);
 }

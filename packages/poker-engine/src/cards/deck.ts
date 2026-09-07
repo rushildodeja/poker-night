@@ -26,6 +26,11 @@ export class Deck {
     return new Deck(SUITS.flatMap(suit => RANKS.map(rank => ({ suit, rank }))));
   }
 
+  /** Rehydrates a deck from a previously persisted ordered remainder. */
+  static fromRemaining(cards: Card[]): Deck {
+    return new Deck(cards.map(card => ({ ...card })));
+  }
+
   shuffle(random: RandomSource = new CryptoRandom()): this {
     for (let i = this.cards.length - 1; i > 0; i--) {
       const j = random.nextInt(i + 1);
@@ -40,4 +45,7 @@ export class Deck {
   }
 
   remaining(): number { return this.cards.length; }
+
+  /** Returns a defensive copy for durable checkpointing. */
+  remainingCards(): Card[] { return this.cards.map(card => ({ ...card })); }
 }

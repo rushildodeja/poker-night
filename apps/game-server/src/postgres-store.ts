@@ -1,22 +1,8 @@
 import { Pool, type PoolClient } from 'pg';
 import type { PokerTableCheckpoint } from '@poker-night/poker-engine';
-import type { TableCheckpointRecord, TableEventRecord } from './durable-store.js';
+import type { DurableTableStore, PersistedMutation, TableCheckpointRecord, TableEventRecord } from './durable-store.js';
 
-export type PersistedMutation = Readonly<{
-  tableId: string;
-  sequence: number;
-  handId: string;
-  requestId: string;
-  events: readonly TableEventRecord['event'][];
-  checkpoint: PokerTableCheckpoint;
-  savedAt: number;
-}>;
-
-/**
- * PostgreSQL implementation for authoritative table durability.
- * A mutation is committed as one transaction: event log + checkpoint.
- */
-export class PostgresDurableTableStore {
+export class PostgresDurableTableStore implements DurableTableStore {
   readonly pool: Pool;
 
   constructor(connectionString = process.env.DATABASE_URL) {
@@ -26,10 +12,8 @@ export class PostgresDurableTableStore {
 
   async loadCheckpoint(tableId: string): Promise<TableCheckpointRecord | null> {
     const result = await this.pool.query(
-      `select table_id, sequence, hand_id, checkpoint, extract(epoch from saved_at) * 1000 as saved_at
-       from public.poker_table_checkpoints where table_id = $1`,
-      [tableId],
-    );
+      `select table_id, sequence, checkpoint, extract(epoch from saved_at) * 1000 as saved_at
+       from public.poker_table_checkpoints where table_id = $1`, [tableId]);
     const row = result.rows[0];
     if (!row) return null;
     return { tableId: row.table_id, sequence: Number(row.sequence), checkpoint: row.checkpoint as PokerTableCheckpoint, savedAt: Number(row.saved_at) };
@@ -37,69 +21,48 @@ export class PostgresDurableTableStore {
 
   async saveCheckpoint(record: TableCheckpointRecord): Promise<void> {
     const client = await this.pool.connect();
-    try {
-      await client.query('begin');
-      await this.writeCheckpoint(client, record);
-      await client.query('commit');
-    } catch (error) {
-      await client.query('rollback');
-      throw error;
-    } finally { client.release(); }
+    try { await client.query('begin'); await this.writeCheckpoint(client, record); await client.query('commit'); }
+    catch (error) { await client.query('rollback'); throw error; }
+    finally { client.release(); }
   }
 
   async appendEvent(record: TableEventRecord): Promise<void> {
     await this.pool.query(
-      `insert into public.poker_table_events(table_id, sequence, hand_id, event, saved_at)
-       values ($1, $2, $3, $4::jsonb, to_timestamp($5 / 1000.0))`,
-      [record.tableId, record.sequence, record.handId, JSON.stringify(record.event), record.savedAt],
-    );
+      `insert into public.poker_table_events(table_id, sequence, event_index, hand_id, event, request_id, saved_at)
+       values ($1, $2, $3, $4, $5::jsonb, $6, to_timestamp($7 / 1000.0))`,
+      [record.tableId, record.sequence, record.eventIndex, record.handId, JSON.stringify(record.event), record.requestId, record.savedAt]);
   }
 
   async listEventsAfter(tableId: string, sequence: number): Promise<TableEventRecord[]> {
     const result = await this.pool.query(
-      `select table_id, sequence, hand_id, event, extract(epoch from saved_at) * 1000 as saved_at
-       from public.poker_table_events where table_id = $1 and sequence > $2 order by sequence asc`,
-      [tableId, sequence],
-    );
-    return result.rows.map((row) => ({ tableId: row.table_id, sequence: Number(row.sequence), handId: row.hand_id, event: row.event, savedAt: Number(row.saved_at) }));
+      `select table_id, sequence, event_index, hand_id, event, request_id, extract(epoch from saved_at) * 1000 as saved_at
+       from public.poker_table_events where table_id = $1 and sequence > $2 order by sequence asc, event_index asc`, [tableId, sequence]);
+    return result.rows.map((row) => ({ tableId: row.table_id, sequence: Number(row.sequence), eventIndex: Number(row.event_index), handId: row.hand_id, event: row.event, requestId: row.request_id, savedAt: Number(row.saved_at) }));
   }
 
   async persistMutation(mutation: PersistedMutation): Promise<void> {
     const client = await this.pool.connect();
     try {
       await client.query('begin');
-      const lock = await client.query(
-        `select sequence from public.poker_table_checkpoints where table_id = $1 for update`,
-        [mutation.tableId],
-      );
+      const lock = await client.query(`select sequence from public.poker_table_checkpoints where table_id = $1 for update`, [mutation.tableId]);
       const current = lock.rows[0] ? Number(lock.rows[0].sequence) : 0;
       if (mutation.sequence !== current + 1) throw new Error(`Persistence sequence conflict: expected ${current + 1}, got ${mutation.sequence}`);
-
-      for (let index = 0; index < mutation.events.length; index += 1) {
+      const existing = await client.query(`select sequence from public.poker_table_events where table_id = $1 and request_id = $2 limit 1`, [mutation.tableId, mutation.requestId]);
+      if (existing.rows[0]) throw new Error(`Request already persisted at sequence ${Number(existing.rows[0].sequence)}`);
+      for (let eventIndex = 0; eventIndex < mutation.events.length; eventIndex += 1) {
         await client.query(
           `insert into public.poker_table_events(table_id, sequence, event_index, hand_id, event, request_id, saved_at)
            values ($1, $2, $3, $4, $5::jsonb, $6, to_timestamp($7 / 1000.0))`,
-          [mutation.tableId, mutation.sequence, index, mutation.handId, JSON.stringify(mutation.events[index]), mutation.requestId, mutation.savedAt],
-        );
+          [mutation.tableId, mutation.sequence, eventIndex, mutation.handId, JSON.stringify(mutation.events[eventIndex]), mutation.requestId, mutation.savedAt]);
       }
-      await this.writeCheckpoint(client, {
-        tableId: mutation.tableId,
-        sequence: mutation.sequence,
-        checkpoint: mutation.checkpoint,
-        savedAt: mutation.savedAt,
-      });
+      await this.writeCheckpoint(client, { tableId: mutation.tableId, sequence: mutation.sequence, checkpoint: mutation.checkpoint, savedAt: mutation.savedAt });
       await client.query('commit');
-    } catch (error) {
-      await client.query('rollback');
-      throw error;
-    } finally { client.release(); }
+    } catch (error) { await client.query('rollback'); throw error; }
+    finally { client.release(); }
   }
 
   async findRequest(tableId: string, requestId: string): Promise<number | null> {
-    const result = await this.pool.query(
-      `select sequence from public.poker_table_events where table_id = $1 and request_id = $2 limit 1`,
-      [tableId, requestId],
-    );
+    const result = await this.pool.query(`select sequence from public.poker_table_events where table_id = $1 and request_id = $2 limit 1`, [tableId, requestId]);
     return result.rows[0] ? Number(result.rows[0].sequence) : null;
   }
 
@@ -111,7 +74,6 @@ export class PostgresDurableTableStore {
        values ($1, $2, $3, $4::jsonb, to_timestamp($5 / 1000.0))
        on conflict (table_id) do update set sequence = excluded.sequence, hand_id = excluded.hand_id, checkpoint = excluded.checkpoint, saved_at = excluded.saved_at
        where public.poker_table_checkpoints.sequence <= excluded.sequence`,
-      [record.tableId, record.sequence, record.checkpoint.state.handId ?? '', JSON.stringify(record.checkpoint), record.savedAt],
-    );
+      [record.tableId, record.sequence, record.checkpoint.state.handId ?? '', JSON.stringify(record.checkpoint), record.savedAt]);
   }
 }

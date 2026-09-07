@@ -2,14 +2,16 @@ import type { Card, ActionType, PotState, Street, TableEvent } from '@poker-nigh
 
 export type ProtocolVersion = 1;
 
+/** Client input. Player identity comes from the authenticated connection, never this payload. */
 export type ClientActionRequest = Readonly<{
   protocolVersion: ProtocolVersion;
   requestId: string;
   tableId: string;
   handId: string;
-  playerId: string;
   action: ActionType;
   amount?: number;
+  /** Optional optimistic concurrency guard. The server remains authoritative. */
+  expectedSequence?: number;
 }>;
 
 export type ServerActionAccepted = Readonly<{
@@ -24,11 +26,13 @@ export type ServerActionAccepted = Readonly<{
 export type ServerErrorCode =
   | 'BAD_REQUEST'
   | 'STALE_HAND'
+  | 'STALE_SEQUENCE'
   | 'DUPLICATE_REQUEST'
   | 'NOT_YOUR_TURN'
   | 'INVALID_ACTION'
   | 'TABLE_NOT_FOUND'
   | 'PLAYER_NOT_SEATED'
+  | 'UNAUTHORIZED'
   | 'INTERNAL_ERROR';
 
 export type ServerError = Readonly<{

@@ -1,0 +1,22 @@
+name: Poker Engine Stress Simulation
+
+on:
+  workflow_dispatch:
+
+jobs:
+  stress-simulation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install engine dependencies
+        working-directory: packages/poker-engine
+        run: npm install
+      - name: Typecheck engine
+        working-directory: packages/poker-engine
+        run: npm run typecheck
+      - name: Run 10,000-hand simulation
+        working-directory: packages/poker-engine
+        run: npm run test:stress

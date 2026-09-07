@@ -11,7 +11,7 @@ export class TableRuntime {
 
   snapshot(): TableSnapshot { return toPublicSnapshot(this.table.state, this.sequence); }
 
-  privateSnapshot(playerId: string): PrivateTableSnapshot { return toPrivateSnapshot(this.table.state, playerId, this.sequence); }
+  privateSnapshot(playerId: string): PrivateTableSnapshot { return toPrivateSnapshot(this.table.state, this.sequence, playerId); }
 
   apply(command: AuthenticatedActionCommand): ServerActionAccepted | CommandRejection {
     if (command.tableId !== this.table.state.tableId) return this.reject(command, 'TABLE_NOT_FOUND', 'Table not found');

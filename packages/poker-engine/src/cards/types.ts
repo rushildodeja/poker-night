@@ -8,7 +8,12 @@ export type Card = Readonly<{ suit: Suit; rank: Rank }>;
 
 export const rankName = (rank: Rank): string => {
   if (rank <= 10) return String(rank);
-  return ({ 11: 'J', 12: 'Q', 13: 'K', 14: 'A' } as const)[rank];
+  switch (rank) {
+    case 11: return 'J';
+    case 12: return 'Q';
+    case 13: return 'K';
+    case 14: return 'A';
+  }
 };
 
 export const cardKey = (card: Card): string => `${rankName(card.rank)}${card.suit[0]?.toUpperCase() ?? ''}`;

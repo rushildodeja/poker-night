@@ -10,8 +10,15 @@ export type ClientActionRequest = Readonly<{
   handId: string;
   action: ActionType;
   amount?: number;
-  /** Optional optimistic concurrency guard. The server remains authoritative. */
   expectedSequence?: number;
+}>;
+
+export type ClientResumeRequest = Readonly<{
+  type: 'RESUME';
+  protocolVersion: ProtocolVersion;
+  sessionId: string;
+  tableId: string;
+  lastSequence: number;
 }>;
 
 export type ServerActionAccepted = Readonly<{
@@ -21,6 +28,23 @@ export type ServerActionAccepted = Readonly<{
   tableId: string;
   handId: string;
   sequence: number;
+}>;
+
+export type ServerSessionReady = Readonly<{
+  type: 'SESSION_READY';
+  protocolVersion: ProtocolVersion;
+  sessionId: string;
+  playerId: string;
+}>;
+
+export type ServerResumeAccepted = Readonly<{
+  type: 'RESUME_ACCEPTED';
+  protocolVersion: ProtocolVersion;
+  sessionId: string;
+  playerId: string;
+  tableId: string;
+  sequence: number;
+  staleClient: boolean;
 }>;
 
 export type ServerErrorCode =
@@ -33,6 +57,7 @@ export type ServerErrorCode =
   | 'TABLE_NOT_FOUND'
   | 'PLAYER_NOT_SEATED'
   | 'UNAUTHORIZED'
+  | 'INVALID_SESSION'
   | 'INTERNAL_ERROR';
 
 export type ServerError = Readonly<{
@@ -82,8 +107,8 @@ export type PrivateTableSnapshot = TableSnapshot & Readonly<{
 }>;
 
 export type ServerEvent = Readonly<{
-  type: 'TABLE_SNAPSHOT' | 'ACTION_ACCEPTED' | 'ERROR';
+  type: 'TABLE_SNAPSHOT' | 'ACTION_ACCEPTED' | 'SESSION_READY' | 'RESUME_ACCEPTED' | 'ERROR';
   protocolVersion: ProtocolVersion;
   sequence: number;
-  payload: TableSnapshot | PrivateTableSnapshot | ServerActionAccepted | ServerError;
+  payload: TableSnapshot | PrivateTableSnapshot | ServerActionAccepted | ServerSessionReady | ServerResumeAccepted | ServerError;
 }>;

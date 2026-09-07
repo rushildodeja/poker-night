@@ -21,6 +21,29 @@ export type ClientResumeRequest = Readonly<{
   lastSequence: number;
 }>;
 
+export type ClientListTablesRequest = Readonly<{
+  type: 'LIST_TABLES';
+  protocolVersion: ProtocolVersion;
+}>;
+
+export type ClientCreateTableRequest = Readonly<{
+  type: 'CREATE_TABLE';
+  protocolVersion: ProtocolVersion;
+  requestId: string;
+  smallBlind: number;
+  bigBlind: number;
+  maxPlayers: number;
+  startingStack: number;
+}>;
+
+export type ClientJoinTableRequest = Readonly<{
+  type: 'JOIN_TABLE';
+  protocolVersion: ProtocolVersion;
+  requestId: string;
+  tableId: string;
+  seat?: number;
+}>;
+
 export type ServerActionAccepted = Readonly<{
   type: 'ACTION_ACCEPTED';
   protocolVersion: ProtocolVersion;
@@ -47,6 +70,37 @@ export type ServerResumeAccepted = Readonly<{
   staleClient: boolean;
 }>;
 
+export type ServerTableSummary = Readonly<{
+  tableId: string;
+  maxPlayers: number;
+  seatedPlayers: number;
+  smallBlind: number;
+  bigBlind: number;
+  street: Street;
+  handId: string | null;
+}>;
+
+export type ServerTableList = Readonly<{
+  type: 'TABLE_LIST';
+  protocolVersion: ProtocolVersion;
+  tables: readonly ServerTableSummary[];
+}>;
+
+export type ServerTableCreated = Readonly<{
+  type: 'TABLE_CREATED';
+  protocolVersion: ProtocolVersion;
+  tableId: string;
+  sequence: number;
+}>;
+
+export type ServerTableJoined = Readonly<{
+  type: 'TABLE_JOINED';
+  protocolVersion: ProtocolVersion;
+  requestId: string;
+  tableId: string;
+  sequence: number;
+}>;
+
 export type ServerErrorCode =
   | 'BAD_REQUEST'
   | 'STALE_HAND'
@@ -58,6 +112,10 @@ export type ServerErrorCode =
   | 'PLAYER_NOT_SEATED'
   | 'UNAUTHORIZED'
   | 'INVALID_SESSION'
+  | 'TABLE_FULL'
+  | 'ALREADY_SEATED'
+  | 'SEAT_OCCUPIED'
+  | 'INVALID_TABLE_CONFIG'
   | 'INTERNAL_ERROR';
 
 export type ServerError = Readonly<{
@@ -107,8 +165,8 @@ export type PrivateTableSnapshot = TableSnapshot & Readonly<{
 }>;
 
 export type ServerEvent = Readonly<{
-  type: 'TABLE_SNAPSHOT' | 'ACTION_ACCEPTED' | 'SESSION_READY' | 'RESUME_ACCEPTED' | 'ERROR';
+  type: 'TABLE_SNAPSHOT' | 'ACTION_ACCEPTED' | 'SESSION_READY' | 'RESUME_ACCEPTED' | 'TABLE_LIST' | 'TABLE_CREATED' | 'TABLE_JOINED' | 'ERROR';
   protocolVersion: ProtocolVersion;
   sequence: number;
-  payload: TableSnapshot | PrivateTableSnapshot | ServerActionAccepted | ServerSessionReady | ServerResumeAccepted | ServerError;
+  payload: TableSnapshot | PrivateTableSnapshot | ServerActionAccepted | ServerSessionReady | ServerResumeAccepted | ServerTableList | ServerTableCreated | ServerTableJoined | ServerError;
 }>;

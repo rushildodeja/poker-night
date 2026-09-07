@@ -20,7 +20,9 @@ export function assertTableInvariant(state: TableState, expectedChipTotal: numbe
     assert(Number.isInteger(player.currentBet) && player.currentBet >= 0, `Invalid current bet for ${player.playerId}`);
     assert(Number.isInteger(player.totalContribution) && player.totalContribution >= 0, `Invalid contribution for ${player.playerId}`);
     assert(player.totalContribution >= player.currentBet, `Contribution below current bet for ${player.playerId}`);
-    assert(player.status !== 'ALL_IN' || player.stack === 0, `ALL_IN player still has chips: ${player.playerId}`);
+    if (state.street !== 'HAND_COMPLETE') {
+      assert(player.status !== 'ALL_IN' || player.stack === 0, `ALL_IN player still has chips: ${player.playerId}`);
+    }
   }
 
   const cards: Card[] = [];

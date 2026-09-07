@@ -17,7 +17,6 @@ const authenticate = (request: { headers: Record<string, string | string[] | und
 };
 
 const server = new WebSocketServer({ port });
-
 const send = (socket: WebSocket, payload: unknown): void => socket.send(JSON.stringify(payload));
 
 server.on('connection', (socket, request) => {
@@ -27,7 +26,6 @@ server.on('connection', (socket, request) => {
     socket.close(1008, 'Authentication required');
     return;
   }
-
   const connectionId = randomUUID();
   const connection = { id: connectionId, playerId, send: (message: string) => socket.send(message), close: (code?: number, reason?: string) => socket.close(code, reason) };
   connections.add(connection);
@@ -38,32 +36,27 @@ server.on('connection', (socket, request) => {
       send(socket, { type: 'ERROR', protocolVersion: 1, sequence: 0, payload: { type: 'ERROR', protocolVersion: 1, code: 'BAD_REQUEST', message: 'Message must be valid JSON' } });
       return;
     }
-    const parsed = parseClientActionRequest(requestPayload);
-    if (!parsed.ok) {
-      send(socket, { type: 'ERROR', protocolVersion: 1, sequence: 0, payload: { type: 'ERROR', protocolVersion: 1, code: 'BAD_REQUEST', message: parsed.message } });
+    let parsed;
+    try { parsed = parseClientActionRequest(requestPayload); } catch (error) {
+      send(socket, { type: 'ERROR', protocolVersion: 1, sequence: 0, payload: { type: 'ERROR', protocolVersion: 1, code: 'BAD_REQUEST', message: error instanceof Error ? error.message : 'Invalid request' } });
       return;
     }
-    const command = { ...parsed.value, authenticatedPlayerId: playerId };
+    const command = { ...parsed, authenticatedPlayerId: playerId };
     const table = tables.get(command.tableId);
-    if (!table) {
+    const runtime = runtimes.get(command.tableId);
+    if (!table || !runtime) {
       send(socket, { type: 'ERROR', protocolVersion: 1, sequence: 0, payload: { type: 'ERROR', protocolVersion: 1, requestId: command.requestId, code: 'TABLE_NOT_FOUND', message: 'Table not found' } });
       return;
     }
-    const runtime = runtimes.get(command.tableId);
-    if (!runtime) {
-      send(socket, { type: 'ERROR', protocolVersion: 1, sequence: 0, payload: { type: 'ERROR', protocolVersion: 1, requestId: command.requestId, code: 'INTERNAL_ERROR', message: 'Table runtime unavailable' } });
-      return;
-    }
     const result = runtime.apply(command);
-    if (result.code) {
-      send(socket, { type: 'ERROR', protocolVersion: 1, sequence: runtime.snapshot().sequence, payload: { type: 'ERROR', protocolVersion: 1, requestId: result.requestId, code: result.code === 'STALE_SEQUENCE' ? 'BAD_REQUEST' : result.code, message: result.message } });
+    if ('code' in result) {
+      send(socket, { type: 'ERROR', protocolVersion: 1, sequence: runtime.snapshot().sequence, payload: { type: 'ERROR', protocolVersion: 1, requestId: result.requestId, code: result.code, message: result.message } });
       return;
     }
     send(socket, { type: 'ACTION_ACCEPTED', protocolVersion: 1, sequence: result.sequence, payload: result });
-    const playerIds = table.state.players.map((p) => p.playerId);
-    connections.broadcastToPlayers(playerIds, (recipientId) => JSON.stringify({ type: 'TABLE_SNAPSHOT', protocolVersion: 1, sequence: runtime.snapshot().sequence, payload: toPrivateSnapshot(table.state, recipientId, runtime.snapshot().sequence) }));
+    const sequence = runtime.snapshot().sequence;
+    connections.broadcastToPlayers(table.state.players.map((p) => p.playerId), (recipientId) => JSON.stringify({ type: 'TABLE_SNAPSHOT', protocolVersion: 1, sequence, payload: toPrivateSnapshot(table.state, sequence, recipientId) }));
   });
-
   socket.on('close', () => connections.remove(connectionId));
   socket.on('error', () => connections.remove(connectionId));
 });

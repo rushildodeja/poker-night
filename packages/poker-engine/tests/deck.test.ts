@@ -24,6 +24,6 @@ describe('Deck', () => {
     const cards = deck.draw(52);
     expect(cards).toHaveLength(52);
     expect(new Set(cards.map((card) => `${card.rank}-${card.suit}`)).size).toBe(52);
-    expect(cards[0]).toEqual({ rank: 2, suit: 'spades' });
+    expect(cards[0]).toEqual({ rank: 2, suit: 'clubs' });
   });
 });

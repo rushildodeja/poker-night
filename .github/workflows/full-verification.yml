@@ -9,12 +9,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Enable pnpm
+        run: corepack enable
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
-      - name: Enable pnpm
-        run: corepack enable
       - name: Install workspace dependencies
         run: pnpm install --no-frozen-lockfile
       - name: Typecheck all packages

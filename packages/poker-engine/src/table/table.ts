@@ -126,8 +126,7 @@ export class PokerTable {
     else if (this.state.street === 'TURN') { this.deck.draw(1); this.state.communityCards.push(...this.deck.draw(1)); this.state.street = 'RIVER'; this.recordEvent({ type: 'RIVER_DEALT' }); }
     else if (this.state.street === 'RIVER') { this.state.street = 'SHOWDOWN'; this.state.currentPlayerId = null; this.showdownAndSettle(); return; }
     else throw new Error('Cannot deal the next street from the current state');
-    const firstActor = this.nextActionableId(this.state.dealerButton);
-    if (firstActor === null) this.runoutToShowdown(); else this.state.currentPlayerId = firstActor;
+    this.state.currentPlayerId = this.nextActionableId(this.state.dealerButton);
   }
 
   private runoutToShowdown(): void {

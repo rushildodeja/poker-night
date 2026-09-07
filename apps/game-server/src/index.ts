@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { parseClientActionRequest, parseClientResumeRequest, toPrivateSnapshot } from '@poker-night/game-types';
 import { ConnectionManager } from './connection-manager.js';
+import { ConnectionGuard } from './connection-guard.js';
 import { SessionManager } from './session-manager.js';
 import { TableRegistry } from './table-registry.js';
 import { TableRuntime } from './table-runtime.js';
@@ -41,6 +42,10 @@ server.on('connection', (socket, request) => {
 
   const connectionId = randomUUID();
   const provisionalSessionId = randomUUID();
+  const guard = new ConnectionGuard({
+    maxMessagesPerWindow: Number(process.env.MAX_MESSAGES_PER_SECOND ?? 40),
+    windowMs: 1000,
+  });
   let sessionId: string = provisionalSessionId;
   let active = false;
   sessions.createPending(provisionalSessionId, playerId, connectionId);
@@ -49,6 +54,11 @@ server.on('connection', (socket, request) => {
   send(socket, { type: 'SESSION_READY', protocolVersion: 1, sequence: 0, payload: { type: 'SESSION_READY', protocolVersion: 1, sessionId: provisionalSessionId, playerId } });
 
   socket.on('message', async (raw) => {
+    if (!guard.allow()) {
+      sendError(socket, 'BAD_REQUEST', 'Message rate limit exceeded');
+      socket.close(1008, 'Message rate limit exceeded');
+      return;
+    }
     sessions.touch(sessionId);
     let requestPayload: unknown;
     try { requestPayload = JSON.parse(raw.toString()); } catch { sendError(socket, 'BAD_REQUEST', 'Message must be valid JSON'); return; }

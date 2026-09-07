@@ -1,11 +1,10 @@
-import { randomUUID } from 'node:crypto';
 import { Deck } from '../cards/deck.js';
-import { buildPots } from '../pots/side-pots.js';
-import type { Action, PlayerState, Street, TableState } from './types.js';
+import type { Action, PlayerState, TableState } from './types.js';
 
 export class PokerTable {
   readonly state: TableState;
   private deck: Deck | null = null;
+  private handSequence = 0;
 
   constructor(tableId: string, smallBlind: number, bigBlind: number, maxPlayers = 9) {
     if (maxPlayers < 2 || maxPlayers > 9) throw new Error('Texas Hold’em tables support 2-9 players');
@@ -19,24 +18,27 @@ export class PokerTable {
     if (this.state.street !== 'WAITING' && this.state.street !== 'HAND_COMPLETE') throw new Error('Cannot seat during a hand');
     if (this.state.players.some(p => p.playerId === playerId)) throw new Error('Player already seated');
     if (this.state.players.some(p => p.seat === seat)) throw new Error('Seat occupied');
-    if (seat < 0 || seat >= this.state.maxPlayers || stack < 0) throw new Error('Invalid seat or stack');
+    if (seat < 0 || seat >= this.state.maxPlayers || !Number.isInteger(stack) || stack < 0) throw new Error('Invalid seat or stack');
     this.state.players.push({ playerId, seat, stack, holeCards: [], currentBet: 0, totalContribution: 0, status: 'WAITING', hasActed: false });
   }
 
   startHand(): void {
-    const players = this.state.players.filter(p => p.stack > 0).sort((a,b)=>a.seat-b.seat);
-    if (players.length < 2) throw new Error('At least two funded players are required');
-    this.state.handId = randomUUID(); this.state.street = 'PRE_FLOP'; this.state.communityCards = [];
-    this.state.currentBet = this.state.bigBlind; this.state.minRaise = this.state.bigBlind;
+    const funded = this.state.players.filter(p => p.stack > 0).sort((a,b)=>a.seat-b.seat);
+    if (funded.length < 2) throw new Error('At least two funded players are required');
+    this.handSequence++;
+    this.state.handId = `${this.state.tableId}-${this.handSequence}`;
+    this.state.street = 'PRE_FLOP'; this.state.communityCards = [];
+    this.state.currentBet = 0; this.state.minRaise = this.state.bigBlind;
     this.deck = Deck.standard().shuffle();
-    this.state.dealerButton = this.nextSeat(this.state.dealerButton);
+    this.state.dealerButton = this.nextFundedSeat(this.state.dealerButton);
     for (const p of this.state.players) { p.holeCards=[]; p.currentBet=0; p.totalContribution=0; p.hasActed=false; p.status=p.stack>0?'ACTIVE':'OUT'; }
     const active = this.activePlayers();
-    const sb = active.length === 2 ? this.nextActive(this.state.dealerButton) : this.nextActive(this.state.dealerButton);
-    const bb = this.nextActive(sb);
+    const sb = this.nextActive(this.state.dealerButton);
+    const bb = this.nextActive(sb.seat);
     this.postBlind(sb, this.state.smallBlind); this.postBlind(bb, this.state.bigBlind);
     for (const p of active) p.holeCards.push(...this.deck.draw(2));
-    this.state.currentPlayerId = this.nextActiveId(bb);
+    this.state.currentBet = Math.max(...active.map(p=>p.currentBet));
+    this.state.currentPlayerId = this.nextActionableId(bb.seat);
   }
 
   act(action: Action): void {
@@ -47,19 +49,21 @@ export class PokerTable {
     else if (action.type === 'CHECK') { if (this.state.currentBet !== p.currentBet) throw new Error('Cannot check facing a bet'); }
     else if (action.type === 'CALL') this.putChips(p, Math.min(this.state.currentBet-p.currentBet, p.stack));
     else if (action.type === 'BET' || action.type === 'RAISE') this.raiseTo(p, amount);
-    else if (action.type === 'ALL_IN') this.putChips(p, p.stack);
+    else if (action.type === 'ALL_IN') this.allIn(p);
     else throw new Error('Unsupported action');
     p.hasActed=true;
-    if (this.activePlayers().filter(x=>x.status==='ACTIVE').length <= 1) { this.state.street='SHOWDOWN'; return; }
+    if (this.livePlayers().length <= 1) { this.state.street='SHOWDOWN'; this.state.currentPlayerId=null; return; }
     this.advanceOrNext();
   }
 
   private raiseTo(p: PlayerState, target: number): void {
-    if (target <= this.state.currentBet) throw new Error('Raise must exceed current bet');
+    if (!Number.isInteger(target) || target <= this.state.currentBet) throw new Error('Raise must exceed current bet');
     const raiseSize = target - this.state.currentBet;
     if (raiseSize < this.state.minRaise && target < p.currentBet + p.stack) throw new Error('Raise is below minimum raise');
-    this.putChips(p, target-p.currentBet); this.state.minRaise=raiseSize; this.state.currentBet=Math.max(this.state.currentBet,target);
+    this.putChips(p, target-p.currentBet); this.state.currentBet=target; this.state.minRaise=raiseSize;
   }
+
+  private allIn(p: PlayerState): void { this.putChips(p, p.stack); if (p.currentBet > this.state.currentBet) { this.state.minRaise=p.currentBet-this.state.currentBet; this.state.currentBet=p.currentBet; } }
 
   private putChips(p: PlayerState, amount: number): void {
     if (!Number.isInteger(amount) || amount < 0 || amount > p.stack) throw new Error('Invalid chip amount');
@@ -71,27 +75,29 @@ export class PokerTable {
   private postBlind(p: PlayerState, blind: number): void { this.putChips(p, Math.min(blind,p.stack)); }
 
   private advanceOrNext(): void {
-    const contenders=this.state.players.filter(p=>p.status==='ACTIVE');
-    const live=contenders.length;
-    const needAction=contenders.some(p=>!p.hasActed || p.currentBet<this.state.currentBet);
-    if (live > 0 && !needAction) { this.dealStreet(); return; }
-    this.state.currentPlayerId=this.nextActiveId(this.state.currentPlayerId!);
+    const live=this.livePlayers();
+    const actionable=live.filter(p=>p.status==='ACTIVE');
+    if (actionable.length===0 || actionable.every(p=>p.hasActed && p.currentBet===this.state.currentBet)) { this.dealStreet(); return; }
+    this.state.currentPlayerId=this.nextActionableId(this.state.currentPlayerId! === '' ? -1 : this.playerSeat(this.state.currentPlayerId!));
   }
 
   private dealStreet(): void {
     if (!this.deck) throw new Error('No deck');
-    for (const p of this.state.players) p.hasActed=false;
+    for (const p of this.state.players) if (p.status==='ACTIVE') p.hasActed=false;
     if (this.state.street==='PRE_FLOP') { this.deck.draw(1); this.state.communityCards.push(...this.deck.draw(3)); this.state.street='FLOP'; }
     else if (this.state.street==='FLOP') { this.deck.draw(1); this.state.communityCards.push(...this.deck.draw(1)); this.state.street='TURN'; }
     else if (this.state.street==='TURN') { this.deck.draw(1); this.state.communityCards.push(...this.deck.draw(1)); this.state.street='RIVER'; }
-    else { this.state.street='SHOWDOWN'; return; }
+    else { this.state.street='SHOWDOWN'; this.state.currentPlayerId=null; return; }
     this.state.currentBet=0; this.state.minRaise=this.state.bigBlind;
     for (const p of this.state.players) p.currentBet=0;
-    this.state.currentPlayerId=this.nextActiveId(this.state.dealerButton);
+    this.state.currentPlayerId=this.nextActionableId(this.state.dealerButton);
   }
 
   private activePlayers(): PlayerState[] { return this.state.players.filter(p=>p.status!=='OUT' && p.status!=='FOLDED'); }
-  private nextSeat(seat: number): number { const seats=this.state.players.filter(p=>p.stack>0).map(p=>p.seat).sort((a,b)=>a-b); return seats.find(s=>s>seat) ?? seats[0]!; }
-  private nextActiveId(from: number): string { return this.nextActive(from).playerId; }
-  private nextActive(from: number): PlayerState { const ps=this.activePlayers().sort((a,b)=>a.seat-b.seat); const found=ps.find(p=>p.seat>from); return found ?? ps[0]!; }
+  private livePlayers(): PlayerState[] { return this.activePlayers(); }
+  private actionablePlayers(): PlayerState[] { return this.state.players.filter(p=>p.status==='ACTIVE'); }
+  private nextFundedSeat(seat: number): number { const seats=this.state.players.filter(p=>p.stack>0).map(p=>p.seat).sort((a,b)=>a-b); return seats.find(s=>s>seat) ?? seats[0]!; }
+  private nextActive(seat: number): PlayerState { const ps=this.activePlayers().sort((a,b)=>a.seat-b.seat); return ps.find(p=>p.seat>seat) ?? ps[0]!; }
+  private nextActionableId(seat: number): string | null { const ps=this.actionablePlayers().sort((a,b)=>a.seat-b.seat); if (!ps.length) return null; return (ps.find(p=>p.seat>seat) ?? ps[0]!).playerId; }
+  private playerSeat(playerId: string): number { return this.state.players.find(p=>p.playerId===playerId)?.seat ?? -1; }
 }

@@ -1,7 +1,9 @@
+const SESSION_TTL_MS = 5 * 60_000;
+
 export type Session = Readonly<{
   sessionId: string;
   playerId: string;
-  connectionId: string;
+  connectionId: string | null;
   connectedAt: number;
   lastSeenAt: number;
 }>;
@@ -11,13 +13,45 @@ export class SessionManager {
   private readonly sessions = new Map<string, Session>();
   private readonly byPlayer = new Map<string, string>();
 
-  attach(sessionId: string, playerId: string, connectionId: string, now = Date.now()): Session {
+  attachNew(sessionId: string, playerId: string, connectionId: string, now = Date.now()): Session {
+    this.prune(now);
     const previous = this.byPlayer.get(playerId);
     if (previous) this.sessions.delete(previous);
     const session: Session = { sessionId, playerId, connectionId, connectedAt: now, lastSeenAt: now };
     this.sessions.set(sessionId, session);
     this.byPlayer.set(playerId, sessionId);
     return session;
+  }
+
+  /** Backwards-compatible alias for creating a fresh session. */
+  attach(sessionId: string, playerId: string, connectionId: string, now = Date.now()): Session {
+    return this.attachNew(sessionId, playerId, connectionId, now);
+  }
+
+  resume(sessionId: string, playerId: string, connectionId: string, now = Date.now()): { session: Session; previousConnectionId: string | null } | null {
+    this.prune(now);
+    const current = this.sessions.get(sessionId);
+    if (!current || current.playerId !== playerId) return null;
+    const previousConnectionId = current.connectionId;
+    const resumed: Session = { ...current, connectionId, lastSeenAt: now };
+    this.sessions.set(sessionId, resumed);
+    this.byPlayer.set(playerId, sessionId);
+    return { session: resumed, previousConnectionId };
+  }
+
+  discard(sessionId: string): void {
+    const current = this.sessions.get(sessionId);
+    if (!current) return;
+    this.sessions.delete(sessionId);
+    if (this.byPlayer.get(current.playerId) === sessionId) this.byPlayer.delete(current.playerId);
+  }
+
+  disconnect(sessionId: string, connectionId: string, now = Date.now()): Session | null {
+    const current = this.sessions.get(sessionId);
+    if (!current || current.connectionId !== connectionId) return null;
+    const updated: Session = { ...current, connectionId: null, lastSeenAt: now };
+    this.sessions.set(sessionId, updated);
+    return updated;
   }
 
   touch(sessionId: string, now = Date.now()): Session | null {
@@ -38,8 +72,14 @@ export class SessionManager {
     const current = this.sessions.get(sessionId);
     if (!current) return null;
     this.sessions.delete(sessionId);
-    if (this.byPlayer.get(current.playerId) === sessionId) this.byPlayer.delete(current.playerId);
+    if (this.byPlayer.get(current.playerId) === sessionId) this.byPlayer.delete(sessionId);
     return current;
+  }
+
+  prune(now = Date.now()): void {
+    for (const [sessionId, session] of this.sessions) {
+      if (session.connectionId === null && now - session.lastSeenAt > SESSION_TTL_MS) this.discard(sessionId);
+    }
   }
 
   size(): number { return this.sessions.size; }

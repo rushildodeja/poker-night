@@ -3,17 +3,18 @@ export type ActionTimeout = Readonly<{
   handId: string;
   playerId: string;
   expectedSequence: number;
+  requestId: string;
 }>;
 
 export type ActionTimerHandler = (timeout: ActionTimeout) => void | Promise<void>;
 
-/** Owns one deadline per table and cancels/replaces it whenever state advances. */
+/** Owns one deadline per table and replaces stale timers whenever table state advances. */
 export class ActionTimerManager {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  schedule(timeout: ActionTimeout, deadline: number, handler: ActionTimerHandler): void {
+  schedule(timeout: ActionTimeout, deadline: number, handler: ActionTimerHandler, now = Date.now()): void {
     this.cancel(timeout.tableId);
-    const delay = Math.max(0, deadline - Date.now());
+    const delay = Math.max(0, deadline - now);
     const timer = setTimeout(() => {
       this.timers.delete(timeout.tableId);
       void handler(timeout);
@@ -28,6 +29,8 @@ export class ActionTimerManager {
   }
 
   cancelAll(): void {
-    for (const tableId of this.timers.keys()) this.cancel(tableId);
+    for (const tableId of [...this.timers.keys()]) this.cancel(tableId);
   }
+
+  has(tableId: string): boolean { return this.timers.has(tableId); }
 }

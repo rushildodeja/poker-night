@@ -7,10 +7,6 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
-/**
- * Verifies conservation and structural invariants after every simulation action.
- * These checks are intentionally independent from PokerTable's internal methods.
- */
 export function assertTableInvariant(state: TableState, expectedChipTotal: number): void {
   const ids = new Set<string>();
   const seats = new Set<number>();
@@ -20,14 +16,11 @@ export function assertTableInvariant(state: TableState, expectedChipTotal: numbe
     assert(!seats.has(player.seat), `Duplicate seat: ${player.seat}`);
     ids.add(player.playerId);
     seats.add(player.seat);
-
     assert(Number.isInteger(player.stack) && player.stack >= 0, `Invalid stack for ${player.playerId}`);
     assert(Number.isInteger(player.currentBet) && player.currentBet >= 0, `Invalid current bet for ${player.playerId}`);
     assert(Number.isInteger(player.totalContribution) && player.totalContribution >= 0, `Invalid contribution for ${player.playerId}`);
     assert(player.totalContribution >= player.currentBet, `Contribution below current bet for ${player.playerId}`);
-    if (state.street !== 'HAND_COMPLETE') {
-      assert(player.status !== 'ALL_IN' || player.stack === 0, `ALL_IN player still has chips: ${player.playerId}`);
-    }
+    assert(player.status !== 'ALL_IN' || player.stack === 0, `ALL_IN player still has chips: ${player.playerId}`);
   }
 
   const cards: Card[] = [];
@@ -59,8 +52,8 @@ export function assertTableInvariant(state: TableState, expectedChipTotal: numbe
   const potTotal = state.pots.reduce((sum, pot) => sum + pot.amount, 0);
   if (state.pots.length > 0) assert(potTotal === contributionTotal, `Pot total ${potTotal} does not equal contributions ${contributionTotal}`);
 
-  const winnerTotal = state.winners.reduce((sum, winner) => sum + winner.amount, 0);
   if (state.street === 'HAND_COMPLETE') {
+    const winnerTotal = state.winners.reduce((sum, winner) => sum + winner.amount, 0);
     assert(winnerTotal === contributionTotal, `Winner payouts ${winnerTotal} do not equal contributions ${contributionTotal}`);
     assert(state.currentPlayerId === null, 'Completed hand still has an acting player');
   }

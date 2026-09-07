@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { parseClientActionRequest, toPrivateSnapshot } from '@poker-night/game-types';
+import { parseClientActionRequest, parseClientResumeRequest, toPrivateSnapshot } from '@poker-night/game-types';
 import { ConnectionManager } from './connection-manager.js';
+import { SessionManager } from './session-manager.js';
 import { TableRegistry } from './table-registry.js';
 import { TableRuntime } from './table-runtime.js';
 import { PostgresDurableTableStore } from './postgres-store.js';
@@ -10,29 +11,130 @@ const port = Number(process.env.PORT ?? 8080);
 const tables = new TableRegistry();
 const runtimes = new Map<string, TableRuntime>();
 const connections = new ConnectionManager();
+const sessions = new SessionManager();
 const store = process.env.DATABASE_URL ? new PostgresDurableTableStore() : null;
 
-const authenticate = (request: { headers: Record<string, string | string[] | undefined> }): string | null => { const value = request.headers['x-player-id']; return typeof value === 'string' && value.trim() ? value.trim() : null; };
+// Temporary development identity adapter. Production must replace this with verified session/JWT authentication.
+const authenticate = (request: { headers: Record<string, string | string[] | undefined> }): string | null => {
+  const value = request.headers['x-player-id'];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+};
+
 const server = new WebSocketServer({ port, maxPayload: 16 * 1024 });
-const send = (socket: WebSocket, payload: unknown): void => { if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(payload)); };
+const send = (socket: WebSocket, payload: unknown): void => {
+  if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(payload));
+};
+const sendError = (socket: WebSocket, code: string, message: string, requestId?: string, sequence = 0): void => {
+  send(socket, { type: 'ERROR', protocolVersion: 1, sequence, payload: { type: 'ERROR', protocolVersion: 1, requestId, code, message } });
+};
 
 server.on('connection', (socket, request) => {
   const playerId = authenticate(request as { headers: Record<string, string | string[] | undefined> });
-  if (!playerId) { send(socket, { type: 'ERROR', protocolVersion: 1, sequence: 0, payload: { type: 'ERROR', protocolVersion: 1, code: 'UNAUTHORIZED', message: 'Authentication required' } }); socket.close(1008, 'Authentication required'); return; }
+  if (!playerId) {
+    sendError(socket, 'UNAUTHORIZED', 'Authentication required');
+    socket.close(1008, 'Authentication required');
+    return;
+  }
+
   const connectionId = randomUUID();
-  const connection = { id: connectionId, playerId, send: (message: string) => { if (socket.readyState === socket.OPEN) socket.send(message); }, close: (code?: number, reason?: string) => socket.close(code, reason) };
+  const provisionalSessionId = randomUUID();
+  let sessionId = provisionalSessionId;
+  let resumed = false;
+  sessions.attachNew(provisionalSessionId, playerId, connectionId);
+
+  const connection = {
+    id: connectionId,
+    playerId,
+    send: (message: string) => { if (socket.readyState === socket.OPEN) socket.send(message); },
+    close: (code?: number, reason?: string) => socket.close(code, reason),
+  };
   connections.add(connection);
+
+  send(socket, { type: 'SESSION_READY', protocolVersion: 1, sequence: 0, payload: { type: 'SESSION_READY', protocolVersion: 1, sessionId: provisionalSessionId, playerId } });
+
   socket.on('message', async (raw) => {
-    let requestPayload: unknown; try { requestPayload = JSON.parse(raw.toString()); } catch { send(socket, { type: 'ERROR', protocolVersion: 1, sequence: 0, payload: { type: 'ERROR', protocolVersion: 1, code: 'BAD_REQUEST', message: 'Message must be valid JSON' } }); return; }
-    let parsed; try { parsed = parseClientActionRequest(requestPayload); } catch (error) { send(socket, { type: 'ERROR', protocolVersion: 1, sequence: 0, payload: { type: 'ERROR', protocolVersion: 1, code: 'BAD_REQUEST', message: error instanceof Error ? error.message : 'Invalid request' } }); return; }
-    const command = { ...parsed, authenticatedPlayerId: playerId }; const table = tables.get(command.tableId); const runtime = runtimes.get(command.tableId);
-    if (!table || !runtime) { send(socket, { type: 'ERROR', protocolVersion: 1, sequence: 0, payload: { type: 'ERROR', protocolVersion: 1, requestId: command.requestId, code: 'TABLE_NOT_FOUND', message: 'Table not found' } }); return; }
+    sessions.touch(sessionId);
+    let requestPayload: unknown;
+    try { requestPayload = JSON.parse(raw.toString()); }
+    catch { sendError(socket, 'BAD_REQUEST', 'Message must be valid JSON'); return; }
+
+    if (requestPayload && typeof requestPayload === 'object' && (requestPayload as Record<string, unknown>).type === 'RESUME') {
+      let resume;
+      try { resume = parseClientResumeRequest(requestPayload); }
+      catch (error) { sendError(socket, 'BAD_REQUEST', error instanceof Error ? error.message : 'Invalid resume request'); return; }
+
+      const table = tables.get(resume.tableId);
+      const runtime = runtimes.get(resume.tableId);
+      if (!table || !runtime) { sendError(socket, 'TABLE_NOT_FOUND', 'Table not found'); return; }
+
+      const result = sessions.resume(resume.sessionId, playerId, connectionId);
+      if (!result) { sendError(socket, 'INVALID_SESSION', 'Session is invalid, expired, or belongs to another player'); return; }
+
+      if (sessionId !== resume.sessionId) sessions.discard(sessionId);
+      sessionId = resume.sessionId;
+      resumed = true;
+
+      if (result.previousConnectionId && result.previousConnectionId !== connectionId) {
+        connections.get(result.previousConnectionId)?.close(4001, 'Session resumed on another connection');
+      }
+
+      send(socket, {
+        type: 'RESUME_ACCEPTED',
+        protocolVersion: 1,
+        sequence: runtime.getSequence(),
+        payload: {
+          type: 'RESUME_ACCEPTED',
+          protocolVersion: 1,
+          sessionId,
+          playerId,
+          tableId: resume.tableId,
+          sequence: runtime.getSequence(),
+          staleClient: resume.lastSequence !== runtime.getSequence(),
+        },
+      });
+
+      if (!table.state.players.some((player) => player.playerId === playerId)) {
+        sendError(socket, 'PLAYER_NOT_SEATED', 'Player is no longer seated at this table', undefined, runtime.getSequence());
+        return;
+      }
+
+      send(socket, {
+        type: 'TABLE_SNAPSHOT',
+        protocolVersion: 1,
+        sequence: runtime.getSequence(),
+        payload: toPrivateSnapshot(table.state, runtime.getSequence(), playerId),
+      });
+      return;
+    }
+
+    if (!resumed && requestPayload && typeof requestPayload === 'object' && (requestPayload as Record<string, unknown>).type !== 'RESUME') {
+      // A newly connected client may act without a resume; its SESSION_READY session is authoritative.
+      resumed = true;
+    }
+
+    let parsed;
+    try { parsed = parseClientActionRequest(requestPayload); }
+    catch (error) { sendError(socket, 'BAD_REQUEST', error instanceof Error ? error.message : 'Invalid request'); return; }
+
+    const command = { ...parsed, authenticatedPlayerId: playerId };
+    const table = tables.get(command.tableId);
+    const runtime = runtimes.get(command.tableId);
+    if (!table || !runtime) { sendError(socket, 'TABLE_NOT_FOUND', 'Table not found', command.requestId); return; }
+
     const result = await runtime.apply(command);
-    if ('code' in result) { send(socket, { type: 'ERROR', protocolVersion: 1, sequence: runtime.getSequence(), payload: { type: 'ERROR', protocolVersion: 1, requestId: result.requestId, code: result.code, message: result.message } }); return; }
-    send(socket, { type: 'ACTION_ACCEPTED', protocolVersion: 1, sequence: result.sequence, payload: result }); const sequence = runtime.getSequence();
-    connections.broadcastToPlayers(table.state.players.map((p) => p.playerId), (recipientId) => JSON.stringify({ type: 'TABLE_SNAPSHOT', protocolVersion: 1, sequence, payload: toPrivateSnapshot(table.state, sequence, recipientId) }));
+    if ('code' in result) { sendError(socket, result.code, result.message, result.requestId, runtime.getSequence()); return; }
+
+    send(socket, { type: 'ACTION_ACCEPTED', protocolVersion: 1, sequence: result.sequence, payload: result });
+    const sequence = runtime.getSequence();
+    connections.broadcastToPlayers(table.state.players.map((player) => player.playerId), (recipientId) => JSON.stringify({ type: 'TABLE_SNAPSHOT', protocolVersion: 1, sequence, payload: toPrivateSnapshot(table.state, sequence, recipientId) }));
   });
-  socket.on('close', () => connections.remove(connectionId)); socket.on('error', () => connections.remove(connectionId));
+
+  const detach = () => {
+    connections.remove(connectionId);
+    sessions.disconnect(sessionId, connectionId);
+  };
+  socket.on('close', detach);
+  socket.on('error', detach);
 });
 
 async function bootstrap(): Promise<void> {
@@ -47,10 +149,16 @@ async function bootstrap(): Promise<void> {
     console.log(`Recovered ${runtimes.size} persisted table(s)`);
   } else {
     const demo = tables.create('dev-table', 50, 100, 9);
-    demo.seatPlayer('demo-1', 0, 10000); demo.seatPlayer('demo-2', 1, 10000); demo.startHand();
-    const runtime = TableRuntime.create(demo); runtimes.set(demo.state.tableId, runtime);
+    demo.seatPlayer('demo-1', 0, 10000);
+    demo.seatPlayer('demo-2', 1, 10000);
+    demo.startHand();
+    const runtime = new TableRuntime(demo);
+    runtimes.set(demo.state.tableId, runtime);
   }
   console.log(`Poker Night game server listening on :${port}`);
 }
 
-void bootstrap().catch((error) => { console.error('Game server bootstrap failed', error); process.exitCode = 1; });
+void bootstrap().catch((error) => {
+  console.error('Game server bootstrap failed', error);
+  process.exitCode = 1;
+});

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
+    "test:stress": "vitest run tests/simulation.stress.test.ts --testTimeout=120000",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

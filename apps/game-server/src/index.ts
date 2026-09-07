@@ -13,11 +13,13 @@ const connections = new ConnectionManager();
 // Temporary development identity adapter. Production must replace this with verified session/JWT authentication.
 const authenticate = (request: { headers: Record<string, string | string[] | undefined> }): string | null => {
   const value = request.headers['x-player-id'];
-  return typeof value === 'string' && value.trim() ? value : null;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 };
 
-const server = new WebSocketServer({ port });
-const send = (socket: WebSocket, payload: unknown): void => socket.send(JSON.stringify(payload));
+const server = new WebSocketServer({ port, maxPayload: 16 * 1024 });
+const send = (socket: WebSocket, payload: unknown): void => {
+  if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(payload));
+};
 
 server.on('connection', (socket, request) => {
   const playerId = authenticate(request as { headers: Record<string, string | string[] | undefined> });
@@ -26,11 +28,12 @@ server.on('connection', (socket, request) => {
     socket.close(1008, 'Authentication required');
     return;
   }
+
   const connectionId = randomUUID();
-  const connection = { id: connectionId, playerId, send: (message: string) => socket.send(message), close: (code?: number, reason?: string) => socket.close(code, reason) };
+  const connection = { id: connectionId, playerId, send: (message: string) => { if (socket.readyState === socket.OPEN) socket.send(message); }, close: (code?: number, reason?: string) => socket.close(code, reason) };
   connections.add(connection);
 
-  socket.on('message', (raw) => {
+  socket.on('message', async (raw) => {
     let requestPayload: unknown;
     try { requestPayload = JSON.parse(raw.toString()); } catch {
       send(socket, { type: 'ERROR', protocolVersion: 1, sequence: 0, payload: { type: 'ERROR', protocolVersion: 1, code: 'BAD_REQUEST', message: 'Message must be valid JSON' } });
@@ -41,6 +44,7 @@ server.on('connection', (socket, request) => {
       send(socket, { type: 'ERROR', protocolVersion: 1, sequence: 0, payload: { type: 'ERROR', protocolVersion: 1, code: 'BAD_REQUEST', message: error instanceof Error ? error.message : 'Invalid request' } });
       return;
     }
+
     const command = { ...parsed, authenticatedPlayerId: playerId };
     const table = tables.get(command.tableId);
     const runtime = runtimes.get(command.tableId);
@@ -48,13 +52,15 @@ server.on('connection', (socket, request) => {
       send(socket, { type: 'ERROR', protocolVersion: 1, sequence: 0, payload: { type: 'ERROR', protocolVersion: 1, requestId: command.requestId, code: 'TABLE_NOT_FOUND', message: 'Table not found' } });
       return;
     }
-    const result = runtime.apply(command);
+
+    const result = await runtime.apply(command);
     if ('code' in result) {
-      send(socket, { type: 'ERROR', protocolVersion: 1, sequence: runtime.snapshot().sequence, payload: { type: 'ERROR', protocolVersion: 1, requestId: result.requestId, code: result.code, message: result.message } });
+      send(socket, { type: 'ERROR', protocolVersion: 1, sequence: runtime.getSequence(), payload: { type: 'ERROR', protocolVersion: 1, requestId: result.requestId, code: result.code, message: result.message } });
       return;
     }
+
     send(socket, { type: 'ACTION_ACCEPTED', protocolVersion: 1, sequence: result.sequence, payload: result });
-    const sequence = runtime.snapshot().sequence;
+    const sequence = runtime.getSequence();
     connections.broadcastToPlayers(table.state.players.map((p) => p.playerId), (recipientId) => JSON.stringify({ type: 'TABLE_SNAPSHOT', protocolVersion: 1, sequence, payload: toPrivateSnapshot(table.state, sequence, recipientId) }));
   });
   socket.on('close', () => connections.remove(connectionId));

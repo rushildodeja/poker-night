@@ -9,6 +9,7 @@ import { TableRuntime } from './table-runtime.js';
 import { PostgresDurableTableStore } from './postgres-store.js';
 import { ActionTimerManager } from './action-timer.js';
 import { ActionTimeoutCoordinator } from './action-timeout-coordinator.js';
+import { createAuthenticator } from './authenticator.js';
 
 const port = Number(process.env.PORT ?? 8080);
 const tables = new TableRegistry();
@@ -17,11 +18,8 @@ const connections = new ConnectionManager();
 const sessions = new SessionManager();
 const timers = new ActionTimerManager();
 const store = process.env.DATABASE_URL ? new PostgresDurableTableStore() : null;
+const authenticator = createAuthenticator();
 
-const authenticate = (request: { headers: Record<string, string | string[] | undefined> }): string | null => {
-  const value = request.headers['x-player-id'];
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
-};
 const server = new WebSocketServer({ port, maxPayload: 16 * 1024 });
 const send = (socket: WebSocket, payload: unknown): void => { if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(payload)); };
 const sendError = (socket: WebSocket, code: string, message: string, requestId?: string, sequence = 0): void => {
@@ -37,7 +35,7 @@ const timeoutCoordinator = new ActionTimeoutCoordinator(timers, (runtime, result
 });
 
 server.on('connection', (socket, request) => {
-  const playerId = authenticate(request as { headers: Record<string, string | string[] | undefined> });
+  const playerId = authenticator.authenticate(request as { headers: Record<string, string | string[] | undefined> });
   if (!playerId) { sendError(socket, 'UNAUTHORIZED', 'Authentication required'); socket.close(1008, 'Authentication required'); return; }
 
   const connectionId = randomUUID();

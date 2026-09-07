@@ -8,7 +8,6 @@ import type { ActionTimeout } from './action-timer.js';
 
 const REQUEST_REPLAY_WINDOW = 10_000;
 const DEFAULT_ACTION_TIMEOUT_MS = 30_000;
-
 type ProcessedRequest = { sequence: number; processedAt: number };
 
 export class TableRuntime {
@@ -39,6 +38,14 @@ export class TableRuntime {
     const persisted = await store.listEventsAfter(tableId, Math.max(0, record.sequence - 100));
     for (const event of persisted) runtime.processed.set(event.requestId, { sequence: event.sequence, processedAt: event.savedAt });
     return runtime;
+  }
+
+  async ensureActionDeadlinePersisted(now = Date.now()): Promise<void> {
+    if (!this.store || this.table.state.actionDeadline !== null) return;
+    const before = this.table.state.actionDeadline;
+    this.armDeadlineIfNeeded(now);
+    if (this.table.state.actionDeadline === before) return;
+    await this.store.saveCheckpoint({ tableId: this.table.state.tableId, sequence: this.sequence, checkpoint: this.table.checkpoint(), savedAt: now });
   }
 
   snapshot(): TableSnapshot { return toPublicSnapshot(this.table.state, this.sequence); }
@@ -111,9 +118,6 @@ export class TableRuntime {
     else this.table.state.actionDeadline = null;
   }
 
-  private pruneProcessed(): void {
-    const cutoff = Date.now() - REQUEST_REPLAY_WINDOW;
-    for (const [requestId, entry] of this.processed) if (entry.processedAt < cutoff) this.processed.delete(requestId);
-  }
+  private pruneProcessed(): void { const cutoff = Date.now() - REQUEST_REPLAY_WINDOW; for (const [requestId, entry] of this.processed) if (entry.processedAt < cutoff) this.processed.delete(requestId); }
   private reject(command: Pick<AuthenticatedActionCommand, 'requestId'>, code: CommandRejection['code'], message: string): CommandRejection { return { requestId: command.requestId, code, message }; }
 }

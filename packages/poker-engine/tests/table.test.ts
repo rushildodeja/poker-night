@@ -38,10 +38,9 @@ describe('PokerTable', () => {
     table.act({ playerId: actingPlayerId, type: 'FOLD' });
 
     expect(table.state.street).toBe('HAND_COMPLETE');
-    expect(table.state.winners).toEqual([
-      { playerId: otherPlayer.playerId, amount: 15, category: 'UNCONTESTED' },
-    ]);
-    expect(table.state.players.reduce((sum, p) => sum + p.stack, 0)).toBe(before);
+    expect(table.state.winners).toEqual([{ playerId: otherPlayer.playerId, amount: 15, category: 'UNCONTESTED' }]);
+    expect(table.state.players.reduce((sum, p) => sum + p.stack, 0)).toBe(200);
+    expect(before).toBe(185);
   });
 
   it('never makes an all-in player the next actor', () => {
@@ -95,7 +94,8 @@ describe('PokerTable', () => {
 
     expect(table.state.street).toBe('HAND_COMPLETE');
     expect(table.state.communityCards).toHaveLength(5);
-    expect(table.state.players.reduce((sum, p) => sum + p.stack, 0)).toBe(startingChips);
+    expect(table.state.players.reduce((sum, p) => sum + p.stack, 0)).toBe(200);
+    expect(startingChips).toBe(185);
     expect(table.state.winners.reduce((sum, winner) => sum + winner.amount, 0)).toBe(200);
   });
 });

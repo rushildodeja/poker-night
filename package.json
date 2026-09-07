@@ -1,0 +1,9 @@
+{
+  "name": "poker-night",
+  "private": true,
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "test": "pnpm --filter @poker-night/poker-engine test",
+    "typecheck": "pnpm -r typecheck"
+  }
+}

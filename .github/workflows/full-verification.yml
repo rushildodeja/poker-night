@@ -2,7 +2,12 @@ name: Poker Night Full Verification
 
 on:
   push:
-    branches: [verification/full-system-2026-09-07]
+    branches:
+      - main
+      - 'feature/**'
+      - 'verification/**'
+  pull_request:
+    branches: [main]
 
 jobs:
   full-verification:

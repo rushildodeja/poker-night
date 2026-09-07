@@ -15,13 +15,7 @@ export class PokerTable {
   private handSequence = 0;
   private readonly random: RandomSource;
 
-  constructor(
-    tableId: string,
-    smallBlind: number,
-    bigBlind: number,
-    maxPlayers = 9,
-    random: RandomSource = new CryptoRandom(),
-  ) {
+  constructor(tableId: string, smallBlind: number, bigBlind: number, maxPlayers = 9, random: RandomSource = new CryptoRandom()) {
     if (!tableId.trim()) throw new Error('Table id is required');
     if (maxPlayers < 2 || maxPlayers > 9 || !Number.isInteger(maxPlayers)) throw new Error('Texas Hold’em tables support 2-9 players');
     if (!Number.isInteger(smallBlind) || !Number.isInteger(bigBlind) || smallBlind <= 0 || bigBlind !== smallBlind * 2) throw new Error('Blinds must be positive integers with a 1:2 ratio');
@@ -32,14 +26,17 @@ export class PokerTable {
   static fromCheckpoint(checkpoint: PokerTableCheckpoint, random: RandomSource = new CryptoRandom()): PokerTable {
     const s = checkpoint.state;
     const table = new PokerTable(s.tableId, s.smallBlind, s.bigBlind, s.maxPlayers, random);
-    Object.assign(table.state, structuredClone(s));
-    table.handSequence = checkpoint.handSequence;
-    table.deck = checkpoint.remainingDeck.length ? Deck.fromRemaining(checkpoint.remainingDeck) : null;
+    table.restore(checkpoint);
     return table;
   }
 
-  checkpoint(): PokerTableCheckpoint {
-    return { state: structuredClone(this.state), remainingDeck: this.deck?.remainingCards() ?? [], handSequence: this.handSequence };
+  checkpoint(): PokerTableCheckpoint { return { state: structuredClone(this.state), remainingDeck: this.deck?.remainingCards() ?? [], handSequence: this.handSequence }; }
+
+  restore(checkpoint: PokerTableCheckpoint): void {
+    if (checkpoint.state.tableId !== this.state.tableId) throw new Error('Checkpoint table id mismatch');
+    Object.assign(this.state, structuredClone(checkpoint.state));
+    this.handSequence = checkpoint.handSequence;
+    this.deck = checkpoint.remainingDeck.length ? Deck.fromRemaining(checkpoint.remainingDeck) : null;
   }
 
   seatPlayer(playerId: string, seat: number, stack: number): void {
@@ -57,77 +54,24 @@ export class PokerTable {
     if (this.state.street !== 'WAITING' && this.state.street !== 'HAND_COMPLETE') throw new Error('Hand already in progress');
     const funded = this.state.players.filter((p) => p.stack > 0).sort((a, b) => a.seat - b.seat);
     if (funded.length < 2) throw new Error('At least two funded players are required');
-    this.handSequence += 1;
-    this.state.handId = `${this.state.tableId}-${this.handSequence}`;
-    this.state.street = 'PRE_FLOP'; this.state.communityCards = []; this.state.currentBet = 0; this.state.minRaise = this.state.bigBlind;
-    this.state.pots = []; this.state.winners = []; this.state.actionDeadline = null; this.deck = Deck.standard().shuffle(this.random);
-    const previousButton = this.state.dealerButton;
-    this.state.dealerButton = this.nextFundedSeat(previousButton);
+    this.handSequence += 1; this.state.handId = `${this.state.tableId}-${this.handSequence}`; this.state.street = 'PRE_FLOP'; this.state.communityCards = []; this.state.currentBet = 0; this.state.minRaise = this.state.bigBlind; this.state.pots = []; this.state.winners = []; this.state.actionDeadline = null; this.deck = Deck.standard().shuffle(this.random);
+    const previousButton = this.state.dealerButton; this.state.dealerButton = this.nextFundedSeat(previousButton);
     for (const player of this.state.players) { player.holeCards = []; player.currentBet = 0; player.totalContribution = 0; player.hasActed = false; player.canRaise = true; player.status = player.stack > 0 ? 'ACTIVE' : 'OUT'; }
-    const active = this.activePlayers();
-    const smallBlindPlayer = this.nextActive(this.state.dealerButton);
-    const bigBlindPlayer = this.nextActive(smallBlindPlayer.seat);
-    this.recordEvent({ type: 'HAND_CREATED' });
-    this.postBlind(smallBlindPlayer, this.state.smallBlind); this.postBlind(bigBlindPlayer, this.state.bigBlind);
-    this.recordEvent({ type: 'BLINDS_POSTED', playerId: smallBlindPlayer.playerId, amount: this.state.smallBlind });
-    this.recordEvent({ type: 'BLINDS_POSTED', playerId: bigBlindPlayer.playerId, amount: this.state.bigBlind });
-    this.dealHoleCards(active);
-    this.recordEvent({ type: 'CARDS_DEALT' });
-    this.state.currentBet = Math.max(...active.map((p) => p.currentBet));
-    this.state.currentPlayerId = this.nextActionableId(bigBlindPlayer.seat);
-    if (this.state.currentPlayerId === null) this.runoutToShowdown();
+    const active = this.activePlayers(); const smallBlindPlayer = this.nextActive(this.state.dealerButton); const bigBlindPlayer = this.nextActive(smallBlindPlayer.seat);
+    this.recordEvent({ type: 'HAND_CREATED' }); this.postBlind(smallBlindPlayer, this.state.smallBlind); this.postBlind(bigBlindPlayer, this.state.bigBlind); this.recordEvent({ type: 'BLINDS_POSTED', playerId: smallBlindPlayer.playerId, amount: this.state.smallBlind }); this.recordEvent({ type: 'BLINDS_POSTED', playerId: bigBlindPlayer.playerId, amount: this.state.bigBlind }); this.dealHoleCards(active); this.recordEvent({ type: 'CARDS_DEALT' });
+    this.state.currentBet = Math.max(...active.map((p) => p.currentBet)); this.state.currentPlayerId = this.nextActionableId(bigBlindPlayer.seat); if (this.state.currentPlayerId === null) this.runoutToShowdown();
   }
 
   act(action: Action): void {
-    const player = this.state.players.find((p) => p.playerId === action.playerId);
-    const inBettingStreet = this.state.street === 'PRE_FLOP' || this.state.street === 'FLOP' || this.state.street === 'TURN' || this.state.street === 'RIVER';
+    const player = this.state.players.find((p) => p.playerId === action.playerId); const inBettingStreet = this.state.street === 'PRE_FLOP' || this.state.street === 'FLOP' || this.state.street === 'TURN' || this.state.street === 'RIVER';
     if (!player || player.status !== 'ACTIVE' || !inBettingStreet || this.state.currentPlayerId !== player.playerId) throw new Error('Not a legal acting player');
     const amount = action.amount ?? 0;
-    switch (action.type) {
-      case 'FOLD': player.status = 'FOLDED'; player.hasActed = true; player.canRaise = false; break;
-      case 'CHECK': if (player.currentBet !== this.state.currentBet) throw new Error('Cannot check facing a bet'); player.hasActed = true; break;
-      case 'CALL': { const toCall = this.state.currentBet - player.currentBet; if (toCall < 0) throw new Error('Invalid table bet state'); this.putChips(player, Math.min(toCall, player.stack)); player.hasActed = true; break; }
-      case 'BET':
-      case 'RAISE': this.raiseTo(player, amount); break;
-      case 'ALL_IN': this.allIn(player); break;
-      default: throw new Error('Unsupported action');
-    }
-    this.recordEvent({ type: 'PLAYER_ACTION', playerId: player.playerId, action: action.type, amount });
-    this.advanceOrNext();
+    switch (action.type) { case 'FOLD': player.status = 'FOLDED'; player.hasActed = true; player.canRaise = false; break; case 'CHECK': if (player.currentBet !== this.state.currentBet) throw new Error('Cannot check facing a bet'); player.hasActed = true; break; case 'CALL': { const toCall = this.state.currentBet - player.currentBet; if (toCall < 0) throw new Error('Invalid table bet state'); this.putChips(player, Math.min(toCall, player.stack)); player.hasActed = true; break; } case 'BET': case 'RAISE': this.raiseTo(player, amount); break; case 'ALL_IN': this.allIn(player); break; default: throw new Error('Unsupported action'); }
+    this.recordEvent({ type: 'PLAYER_ACTION', playerId: player.playerId, action: action.type, amount }); this.advanceOrNext();
   }
 
-  private raiseTo(player: PlayerState, target: number): void {
-    if (!player.canRaise) throw new Error('Betting has not been reopened for this player');
-    if (!Number.isInteger(target) || target <= player.currentBet) throw new Error('Invalid wager amount');
-    if (target > player.currentBet + player.stack) throw new Error('Insufficient stack');
-    const previousBet = this.state.currentBet;
-    const raiseSize = target - previousBet;
-    const isOpeningBet = previousBet === 0;
-    const allIn = target === player.currentBet + player.stack;
-    if (isOpeningBet && target < this.state.minRaise && !allIn) throw new Error('Bet is below minimum bet');
-    if (!isOpeningBet && raiseSize < this.state.minRaise && !allIn) throw new Error('Raise is below minimum raise');
-    const hadAlreadyActed = new Map(this.actionablePlayers().map((p) => [p.playerId, p.hasActed]));
-    this.putChips(player, target - player.currentBet); player.hasActed = true;
-    if (target > previousBet) this.state.currentBet = target;
-    const fullRaise = raiseSize >= this.state.minRaise;
-    if (fullRaise) { this.state.minRaise = raiseSize; for (const other of this.actionablePlayers()) { other.canRaise = true; if (other.playerId !== player.playerId) other.hasActed = false; } }
-    else if (allIn && raiseSize > 0) for (const other of this.actionablePlayers()) if (hadAlreadyActed.get(other.playerId)) other.canRaise = false;
-  }
-
-  private allIn(player: PlayerState): void {
-    if (player.stack <= 0) throw new Error('Player has no chips to move all-in');
-    const previousBet = this.state.currentBet;
-    const resultingBet = player.currentBet + player.stack;
-    const raiseSize = resultingBet - previousBet;
-    const hadAlreadyActed = new Map(this.actionablePlayers().map((p) => [p.playerId, p.hasActed]));
-    this.putChips(player, player.stack); player.hasActed = true; player.canRaise = false;
-    if (resultingBet > previousBet) {
-      this.state.currentBet = resultingBet;
-      if (raiseSize >= this.state.minRaise) { this.state.minRaise = raiseSize; for (const other of this.actionablePlayers()) { other.canRaise = true; if (other.playerId !== player.playerId) other.hasActed = false; } }
-      else for (const other of this.actionablePlayers()) if (hadAlreadyActed.get(other.playerId)) other.canRaise = false;
-    }
-  }
-
+  private raiseTo(player: PlayerState, target: number): void { if (!player.canRaise) throw new Error('Betting has not been reopened for this player'); if (!Number.isInteger(target) || target <= player.currentBet) throw new Error('Invalid wager amount'); if (target > player.currentBet + player.stack) throw new Error('Insufficient stack'); const previousBet = this.state.currentBet; const raiseSize = target - previousBet; const isOpeningBet = previousBet === 0; const allIn = target === player.currentBet + player.stack; if (isOpeningBet && target < this.state.minRaise && !allIn) throw new Error('Bet is below minimum bet'); if (!isOpeningBet && raiseSize < this.state.minRaise && !allIn) throw new Error('Raise is below minimum raise'); const hadAlreadyActed = new Map(this.actionablePlayers().map((p) => [p.playerId, p.hasActed])); this.putChips(player, target - player.currentBet); player.hasActed = true; if (target > previousBet) this.state.currentBet = target; const fullRaise = raiseSize >= this.state.minRaise; if (fullRaise) { this.state.minRaise = raiseSize; for (const other of this.actionablePlayers()) { other.canRaise = true; if (other.playerId !== player.playerId) other.hasActed = false; } } else if (allIn && raiseSize > 0) for (const other of this.actionablePlayers()) if (hadAlreadyActed.get(other.playerId)) other.canRaise = false; }
+  private allIn(player: PlayerState): void { if (player.stack <= 0) throw new Error('Player has no chips to move all-in'); const previousBet = this.state.currentBet; const resultingBet = player.currentBet + player.stack; const raiseSize = resultingBet - previousBet; const hadAlreadyActed = new Map(this.actionablePlayers().map((p) => [p.playerId, p.hasActed])); this.putChips(player, player.stack); player.hasActed = true; player.canRaise = false; if (resultingBet > previousBet) { this.state.currentBet = resultingBet; if (raiseSize >= this.state.minRaise) { this.state.minRaise = raiseSize; for (const other of this.actionablePlayers()) { other.canRaise = true; if (other.playerId !== player.playerId) other.hasActed = false; } } else for (const other of this.actionablePlayers()) if (hadAlreadyActed.get(other.playerId)) other.canRaise = false; } }
   private putChips(player: PlayerState, amount: number): void { if (!Number.isInteger(amount) || amount < 0 || amount > player.stack) throw new Error('Invalid chip amount'); player.stack -= amount; player.currentBet += amount; player.totalContribution += amount; if (player.stack === 0) player.status = 'ALL_IN'; }
   private postBlind(player: PlayerState, blind: number): void { this.putChips(player, Math.min(blind, player.stack)); }
   private advanceOrNext(): void { if (this.livePlayers().length <= 1) { this.awardUncontested(); return; } const actionable = this.actionablePlayers(); if (actionable.length === 0) { this.runoutToShowdown(); return; } const bettingRoundComplete = actionable.every((player) => player.hasActed && player.currentBet === this.state.currentBet); if (bettingRoundComplete) { this.dealNextStreet(); return; } this.state.currentPlayerId = this.nextActionableId(this.playerSeat(this.state.currentPlayerId)); if (this.state.currentPlayerId === null) this.runoutToShowdown(); }

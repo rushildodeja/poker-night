@@ -1,4 +1,4 @@
-import { Deck } from '../cards/deck.js';
+import { Deck, CryptoRandom, type RandomSource } from '../cards/deck.js';
 import { buildPots } from '../pots/side-pots.js';
 import { settle } from './settlement.js';
 import type { Action, PlayerState, TableEvent, TableState } from './types.js';
@@ -7,11 +7,19 @@ export class PokerTable {
   readonly state: TableState;
   private deck: Deck | null = null;
   private handSequence = 0;
+  private readonly random: RandomSource;
 
-  constructor(tableId: string, smallBlind: number, bigBlind: number, maxPlayers = 9) {
+  constructor(
+    tableId: string,
+    smallBlind: number,
+    bigBlind: number,
+    maxPlayers = 9,
+    random: RandomSource = new CryptoRandom(),
+  ) {
     if (!tableId.trim()) throw new Error('Table id is required');
     if (maxPlayers < 2 || maxPlayers > 9 || !Number.isInteger(maxPlayers)) throw new Error('Texas Hold’em tables support 2-9 players');
     if (!Number.isInteger(smallBlind) || !Number.isInteger(bigBlind) || smallBlind <= 0 || bigBlind !== smallBlind * 2) throw new Error('Blinds must be positive integers with a 1:2 ratio');
+    this.random = random;
     this.state = { tableId, handId: null, maxPlayers, players: [], dealerButton: -1, smallBlind, bigBlind, communityCards: [], street: 'WAITING', currentPlayerId: null, currentBet: 0, minRaise: bigBlind, pots: [], actionDeadline: null, winners: [], events: [] };
   }
 
@@ -32,7 +40,7 @@ export class PokerTable {
     this.handSequence += 1;
     this.state.handId = `${this.state.tableId}-${this.handSequence}`;
     this.state.street = 'PRE_FLOP'; this.state.communityCards = []; this.state.currentBet = 0; this.state.minRaise = this.state.bigBlind;
-    this.state.pots = []; this.state.winners = []; this.state.actionDeadline = null; this.deck = Deck.standard().shuffle();
+    this.state.pots = []; this.state.winners = []; this.state.actionDeadline = null; this.deck = Deck.standard().shuffle(this.random);
     this.state.dealerButton = this.nextFundedSeat(this.state.dealerButton);
     for (const player of this.state.players) { player.holeCards = []; player.currentBet = 0; player.totalContribution = 0; player.hasActed = false; player.canRaise = true; player.status = player.stack > 0 ? 'ACTIVE' : 'OUT'; }
     const active = this.activePlayers();

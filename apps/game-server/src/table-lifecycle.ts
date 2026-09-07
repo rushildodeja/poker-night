@@ -7,17 +7,21 @@ export type LifecycleResult =
   | { ok: true; runtime: TableRuntime; response: ServerTableJoined }
   | { ok: false; code: 'TABLE_NOT_FOUND' | 'TABLE_FULL' | 'ALREADY_SEATED' | 'SEAT_OCCUPIED' | 'INVALID_TABLE_CONFIG' | 'INTERNAL_ERROR'; message: string };
 
+export type CreateTableResult =
+  | { ok: true; tableId: string; runtime: TableRuntime }
+  | { ok: false; code: 'INVALID_TABLE_CONFIG' | 'INTERNAL_ERROR'; message: string };
+
 export class TableLifecycleService {
   constructor(private readonly tables: TableRegistry, private readonly runtimes: Map<string, TableRuntime>, private readonly store: DurableTableStore | null) {}
 
-  async create(request: ClientCreateTableRequest, playerId: string): Promise<{ tableId: string; runtime: TableRuntime } | LifecycleResult> {
+  async create(request: ClientCreateTableRequest, playerId: string): Promise<CreateTableResult> {
     try {
       const table = this.tables.createGenerated(request.smallBlind, request.bigBlind, request.maxPlayers);
       table.seatPlayer(playerId, 0, request.startingStack);
       const runtime = new TableRuntime(table, this.store);
       if (this.store) await runtime.initialize();
       this.runtimes.set(table.state.tableId, runtime);
-      return { tableId: table.state.tableId, runtime };
+      return { ok: true, tableId: table.state.tableId, runtime };
     } catch (error) {
       return { ok: false, code: 'INVALID_TABLE_CONFIG', message: error instanceof Error ? error.message : 'Table could not be created' };
     }

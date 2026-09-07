@@ -21,6 +21,7 @@ export type CommandRejection = Readonly<{
     | 'INVALID_ACTION'
     | 'TABLE_NOT_FOUND'
     | 'PLAYER_NOT_SEATED'
-    | 'UNAUTHORIZED';
+    | 'UNAUTHORIZED'
+    | 'INTERNAL_ERROR';
   message: string;
 }>;

@@ -51,16 +51,12 @@ describe('PokerTable', () => {
     table.seatPlayer('carol', 2, 100);
     table.startHand();
 
-    const first = table.state.currentPlayerId!;
-    table.act({ playerId: first, type: 'CALL' });
-    const next = table.state.currentPlayerId!;
-    table.act({ playerId: next, type: 'CALL' });
+    table.act({ playerId: 'alice', type: 'CALL' });
+    table.act({ playerId: 'bob', type: 'CALL' });
+    table.act({ playerId: 'carol', type: 'ALL_IN' });
 
-    const bb = table.state.players.find((p) => p.currentBet === 10)!;
-    table.act({ playerId: bb.playerId, type: 'ALL_IN' });
-
-    expect(table.state.currentPlayerId).not.toBe(bb.playerId);
-    expect(table.state.players.find((p) => p.playerId === bb.playerId)?.status).toBe('ALL_IN');
+    expect(table.state.currentPlayerId).not.toBe('carol');
+    expect(table.state.players.find((p) => p.playerId === 'carol')?.status).toBe('ALL_IN');
   });
 
   it('does not reopen raising after a short all-in raise', () => {

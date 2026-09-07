@@ -23,7 +23,6 @@ export class TableRuntime {
     this.actionTimeoutMs = actionTimeoutMs;
   }
 
-  /** Persists the initial authoritative state before the table accepts live actions. */
   async initialize(): Promise<void> {
     if (!this.store) return;
     const existing = await this.store.loadCheckpoint(this.table.state.tableId);
@@ -32,11 +31,11 @@ export class TableRuntime {
     await this.store.saveCheckpoint({ tableId: this.table.state.tableId, sequence: 0, checkpoint: this.table.checkpoint(), savedAt: Date.now() });
   }
 
-  static async recover(store: DurableTableStore, tableId: string): Promise<TableRuntime | null> {
+  static async recover(store: DurableTableStore, tableId: string, actionTimeoutMs?: number): Promise<TableRuntime | null> {
     const record = await store.loadCheckpoint(tableId);
     if (!record) return null;
     const table = PokerTableClass.fromCheckpoint(record.checkpoint);
-    const runtime = new TableRuntime(table, store, record.sequence);
+    const runtime = new TableRuntime(table, store, record.sequence, actionTimeoutMs);
     const persisted = await store.listEventsAfter(tableId, Math.max(0, record.sequence - 100));
     for (const event of persisted) runtime.processed.set(event.requestId, { sequence: event.sequence, processedAt: event.savedAt });
     return runtime;
@@ -50,18 +49,18 @@ export class TableRuntime {
 
   apply(command: AuthenticatedActionCommand): Promise<ServerActionAccepted | CommandRejection> { return this.queue.enqueue(() => this.applySerialized(command)); }
 
-  /** Executes the single authoritative timeout action for the expected turn. */
   applyTimeout(timeout: ActionTimeout, now = Date.now()): Promise<ServerActionAccepted | CommandRejection> {
     return this.queue.enqueue(async () => {
-      if (timeout.tableId !== this.table.state.tableId) return this.reject({ requestId: timeout.requestId, tableId: timeout.tableId, handId: timeout.handId, authenticatedPlayerId: timeout.playerId, action: 'FOLD' }, 'TABLE_NOT_FOUND', 'Table not found');
-      if (timeout.handId !== this.table.state.handId) return this.reject({ requestId: timeout.requestId, tableId: timeout.tableId, handId: timeout.handId, authenticatedPlayerId: timeout.playerId, action: 'FOLD' }, 'STALE_HAND', 'Hand is no longer current');
-      if (timeout.expectedSequence !== this.sequence) return this.reject({ requestId: timeout.requestId, tableId: timeout.tableId, handId: timeout.handId, authenticatedPlayerId: timeout.playerId, action: 'FOLD' }, 'STALE_SEQUENCE', 'Timeout is no longer current');
-      if (this.table.state.currentPlayerId !== timeout.playerId) return this.reject({ requestId: timeout.requestId, tableId: timeout.tableId, handId: timeout.handId, authenticatedPlayerId: timeout.playerId, action: 'FOLD' }, 'NOT_YOUR_TURN', 'Timeout is no longer for the acting player');
-      if (this.table.state.actionDeadline === null || this.table.state.actionDeadline > now) return this.reject({ requestId: timeout.requestId, tableId: timeout.tableId, handId: timeout.handId, authenticatedPlayerId: timeout.playerId, action: 'FOLD' }, 'INVALID_ACTION', 'Action deadline has not expired');
+      const base = { requestId: timeout.requestId, tableId: timeout.tableId, handId: timeout.handId, authenticatedPlayerId: timeout.playerId, action: 'FOLD' as const };
+      if (timeout.tableId !== this.table.state.tableId) return this.reject(base, 'TABLE_NOT_FOUND', 'Table not found');
+      if (timeout.handId !== this.table.state.handId) return this.reject(base, 'STALE_HAND', 'Hand is no longer current');
+      if (timeout.expectedSequence !== this.sequence) return this.reject(base, 'STALE_SEQUENCE', 'Timeout is no longer current');
+      if (this.table.state.currentPlayerId !== timeout.playerId) return this.reject(base, 'NOT_YOUR_TURN', 'Timeout is no longer for the acting player');
+      if (this.table.state.actionDeadline === null || this.table.state.actionDeadline > now) return this.reject(base, 'INVALID_ACTION', 'Action deadline has not expired');
       const player = this.table.state.players.find((candidate) => candidate.playerId === timeout.playerId);
-      if (!player || player.status !== 'ACTIVE') return this.reject({ requestId: timeout.requestId, tableId: timeout.tableId, handId: timeout.handId, authenticatedPlayerId: timeout.playerId, action: 'FOLD' }, 'NOT_YOUR_TURN', 'Player is no longer actionable');
+      if (!player || player.status !== 'ACTIVE') return this.reject(base, 'NOT_YOUR_TURN', 'Player is no longer actionable');
       const action: Action = player.currentBet === this.table.state.currentBet ? { playerId: timeout.playerId, type: 'CHECK' } : { playerId: timeout.playerId, type: 'FOLD' };
-      return this.applyMutation({ requestId: timeout.requestId, authenticatedPlayerId: timeout.playerId, tableId: timeout.tableId, handId: timeout.handId, action: action.type }, action);
+      return this.applyMutation(base, action);
     });
   }
 
@@ -82,7 +81,6 @@ export class TableRuntime {
     }
     if (command.expectedSequence !== undefined && command.expectedSequence !== this.sequence) return this.reject(command, 'STALE_SEQUENCE', 'Client state is stale');
     if (!this.table.state.players.some((p) => p.playerId === command.authenticatedPlayerId)) return this.reject(command, 'PLAYER_NOT_SEATED', 'Player is not seated at this table');
-
     return this.applyMutation(command, { playerId: command.authenticatedPlayerId, type: command.action, ...(command.amount === undefined ? {} : { amount: command.amount }) });
   }
 

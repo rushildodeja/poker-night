@@ -88,16 +88,16 @@ export class PokerTable {
     const allIn = target === player.currentBet + player.stack;
     if (isOpeningBet && target < this.state.minRaise && !allIn) throw new Error('Bet is below minimum bet');
     if (!isOpeningBet && raiseSize < this.state.minRaise && !allIn) throw new Error('Raise is below minimum raise');
+    const hadAlreadyActed = new Map(this.actionablePlayers().map((p) => [p.playerId, p.hasActed]));
     this.putChips(player, target - player.currentBet);
     player.hasActed = true;
     if (target > previousBet) this.state.currentBet = target;
     const fullRaise = raiseSize >= this.state.minRaise;
     if (fullRaise) {
       this.state.minRaise = raiseSize;
-      for (const other of this.actionablePlayers()) {
-        other.canRaise = true;
-        if (other.playerId !== player.playerId) other.hasActed = false;
-      }
+      for (const other of this.actionablePlayers()) { other.canRaise = true; if (other.playerId !== player.playerId) other.hasActed = false; }
+    } else if (allIn && raiseSize > 0) {
+      for (const other of this.actionablePlayers()) if (hadAlreadyActed.get(other.playerId)) other.canRaise = false;
     }
   }
 
@@ -175,10 +175,7 @@ export class PokerTable {
     this.state.street = 'HAND_COMPLETE'; this.recordEvent({ type: 'HAND_COMPLETED', playerId: winner.playerId, amount });
   }
 
-  private buildCurrentPots(): TableState['pots'] {
-    return buildPots(this.state.players.map((player) => ({ playerId: player.playerId, amount: player.totalContribution, folded: player.status === 'FOLDED' })));
-  }
-
+  private buildCurrentPots(): TableState['pots'] { return buildPots(this.state.players.map((player) => ({ playerId: player.playerId, amount: player.totalContribution, folded: player.status === 'FOLDED' }))); }
   private activePlayers(): PlayerState[] { return this.state.players.filter((p) => p.status !== 'OUT' && p.status !== 'FOLDED'); }
   private livePlayers(): PlayerState[] { return this.activePlayers(); }
   private actionablePlayers(): PlayerState[] { return this.state.players.filter((p) => p.status === 'ACTIVE'); }

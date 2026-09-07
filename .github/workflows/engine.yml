@@ -11,12 +11,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: pnpm install --no-frozen-lockfile
-      - run: pnpm --filter @poker-night/poker-engine typecheck
-      - run: pnpm --filter @poker-night/poker-engine test
+          cache: npm
+          cache-dependency-path: packages/poker-engine/package.json
+      - name: Install engine dependencies
+        working-directory: packages/poker-engine
+        run: npm install
+      - name: Typecheck engine
+        working-directory: packages/poker-engine
+        run: npm run typecheck
+      - name: Test engine
+        working-directory: packages/poker-engine
+        run: npm test

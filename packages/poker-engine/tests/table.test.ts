@@ -66,7 +66,6 @@ describe('PokerTable', () => {
     table.seatPlayer('carol', 2, 15);
     table.startHand();
 
-    // Pre-flop order is seat 0, seat 1, then the big blind seat 2.
     table.act({ playerId: 'alice', type: 'CALL' });
     table.act({ playerId: 'bob', type: 'CALL' });
     table.act({ playerId: 'carol', type: 'ALL_IN' });
@@ -75,9 +74,7 @@ describe('PokerTable', () => {
     expect(table.state.players.find((p) => p.playerId === 'alice')?.canRaise).toBe(false);
     expect(table.state.players.find((p) => p.playerId === 'bob')?.canRaise).toBe(false);
 
-    expect(() => table.act({ playerId: 'alice', type: 'RAISE', amount: 30 })).toThrow(
-      'Betting has not been reopened for this player',
-    );
+    expect(() => table.act({ playerId: 'alice', type: 'RAISE', amount: 30 })).toThrow('Betting has not been reopened for this player');
 
     table.act({ playerId: 'alice', type: 'CALL' });
     table.act({ playerId: 'bob', type: 'CALL' });

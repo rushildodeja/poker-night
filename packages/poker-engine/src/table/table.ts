@@ -124,13 +124,17 @@ export class PokerTable {
     if (this.state.street === 'PRE_FLOP') { this.deck.draw(1); this.state.communityCards.push(...this.deck.draw(3)); this.state.street = 'FLOP'; this.recordEvent({ type: 'FLOP_DEALT' }); }
     else if (this.state.street === 'FLOP') { this.deck.draw(1); this.state.communityCards.push(...this.deck.draw(1)); this.state.street = 'TURN'; this.recordEvent({ type: 'TURN_DEALT' }); }
     else if (this.state.street === 'TURN') { this.deck.draw(1); this.state.communityCards.push(...this.deck.draw(1)); this.state.street = 'RIVER'; this.recordEvent({ type: 'RIVER_DEALT' }); }
-    else if (this.state.street === 'RIVER') { this.state.street = 'SHOWDOWN'; this.state.currentPlayerId = null; return; }
+    else if (this.state.street === 'RIVER') { this.state.street = 'SHOWDOWN'; this.state.currentPlayerId = null; this.showdownAndSettle(); return; }
     else throw new Error('Cannot deal the next street from the current state');
     const firstActor = this.nextActionableId(this.state.dealerButton);
     if (firstActor === null) this.runoutToShowdown(); else this.state.currentPlayerId = firstActor;
   }
 
-  private runoutToShowdown(): void { while (this.state.street !== 'RIVER' && this.state.street !== 'SHOWDOWN') this.dealNextStreet(); if (this.state.street === 'RIVER') this.dealNextStreet(); this.showdownAndSettle(); }
+  private runoutToShowdown(): void {
+    while (this.state.street !== 'RIVER' && this.state.street !== 'SHOWDOWN') this.dealNextStreet();
+    if (this.state.street === 'RIVER') this.dealNextStreet();
+    if (this.state.street === 'SHOWDOWN') this.showdownAndSettle();
+  }
 
   private showdownAndSettle(): void {
     this.state.street = 'SHOWDOWN'; this.state.currentPlayerId = null; this.state.pots = this.buildCurrentPots(); this.recordEvent({ type: 'SHOWDOWN' });

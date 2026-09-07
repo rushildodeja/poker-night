@@ -22,6 +22,10 @@ export class TableRuntime {
     this.actionTimeoutMs = actionTimeoutMs;
   }
 
+  static create(table: PokerTable, store: DurableTableStore | null = null, sequence = 0, actionTimeoutMs = Number(process.env.ACTION_TIMEOUT_MS ?? DEFAULT_ACTION_TIMEOUT_MS)): TableRuntime {
+    return new TableRuntime(table, store, sequence, actionTimeoutMs);
+  }
+
   async initialize(): Promise<void> {
     if (!this.store) return;
     const existing = await this.store.loadCheckpoint(this.table.state.tableId);
@@ -58,7 +62,7 @@ export class TableRuntime {
 
   applyTimeout(timeout: ActionTimeout, now = Date.now()): Promise<ServerActionAccepted | CommandRejection> {
     return this.queue.enqueue(async () => {
-      const base = { requestId: timeout.requestId, tableId: timeout.tableId, handId: timeout.handId, authenticatedPlayerId: timeout.playerId, action: 'FOLD' as const };
+      const base: AuthenticatedActionCommand = { requestId: timeout.requestId, tableId: timeout.tableId, handId: timeout.handId, authenticatedPlayerId: timeout.playerId, action: 'FOLD' };
       if (timeout.tableId !== this.table.state.tableId) return this.reject(base, 'TABLE_NOT_FOUND', 'Table not found');
       if (timeout.handId !== this.table.state.handId) return this.reject(base, 'STALE_HAND', 'Hand is no longer current');
       if (timeout.expectedSequence !== this.sequence) return this.reject(base, 'STALE_SEQUENCE', 'Timeout is no longer current');

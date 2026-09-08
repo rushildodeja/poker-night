@@ -9,7 +9,8 @@ import type { ActionTimeout } from './action-timer.js';
 const REQUEST_REPLAY_WINDOW = 10_000;
 const DEFAULT_ACTION_TIMEOUT_MS = 30_000;
 type ProcessedRequest = { sequence: number; processedAt: number };
-type LifecycleFailure = Readonly<{ ok: false; code: string; message: string }>;
+type LifecycleFailureCode = 'TABLE_NOT_FOUND' | 'TABLE_FULL' | 'ALREADY_SEATED' | 'SEAT_OCCUPIED' | 'INVALID_TABLE_CONFIG' | 'INTERNAL_ERROR' | 'DUPLICATE_REQUEST';
+type LifecycleFailure = Readonly<{ ok: false; code: LifecycleFailureCode; message: string }>;
 export type LifecycleMutationResult<T> =
   | Readonly<{ ok: true; value: T; sequence: number }>
   | LifecycleFailure;
@@ -83,12 +84,12 @@ export class TableRuntime {
     return this.queue.enqueue(async () => {
       this.pruneProcessed();
       const previous = this.processed.get(requestId);
-      if (previous) return { ok: false, code: 'DUPLICATE_REQUEST', message: `Request was already processed at sequence ${previous.sequence}` };
+      if (previous) return { ok: false, code: 'DUPLICATE_REQUEST', message: `Request was already processed at sequence ${previous.sequence}` } as const;
       if (this.store) {
         const persisted = await this.store.findRequest(this.table.state.tableId, requestId);
         if (persisted !== null) {
           this.processed.set(requestId, { sequence: persisted, processedAt: Date.now() });
-          return { ok: false, code: 'DUPLICATE_REQUEST', message: `Request was already processed at sequence ${persisted}` };
+          return { ok: false, code: 'DUPLICATE_REQUEST', message: `Request was already processed at sequence ${persisted}` } as const;
         }
       }
 
@@ -107,10 +108,10 @@ export class TableRuntime {
         }
         this.sequence = nextSequence;
         this.processed.set(requestId, { sequence: this.sequence, processedAt: Date.now() });
-        return { ok: true, value: mutationResult, sequence: this.sequence };
+        return { ok: true, value: mutationResult, sequence: this.sequence } as const;
       } catch (error) {
         this.table.restore(before);
-        return { ok: false, code: 'INTERNAL_ERROR', message: error instanceof Error ? error.message : 'Lifecycle mutation could not be committed' };
+        return { ok: false, code: 'INTERNAL_ERROR', message: error instanceof Error ? error.message : 'Lifecycle mutation could not be committed' } as const;
       }
     });
   }

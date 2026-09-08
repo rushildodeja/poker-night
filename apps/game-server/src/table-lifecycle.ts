@@ -5,11 +5,16 @@ import type { DurableTableStore } from './durable-store.js';
 
 export type LifecycleResult =
   | { ok: true; runtime: TableRuntime; response: ServerTableJoined }
-  | { ok: false; code: 'TABLE_NOT_FOUND' | 'TABLE_FULL' | 'ALREADY_SEATED' | 'SEAT_OCCUPIED' | 'INVALID_TABLE_CONFIG' | 'INTERNAL_ERROR'; message: string };
+  | { ok: false; code: 'TABLE_NOT_FOUND' | 'TABLE_FULL' | 'ALREADY_SEATED' | 'SEAT_OCCUPIED' | 'INVALID_TABLE_CONFIG' | 'INTERNAL_ERROR' | 'DUPLICATE_REQUEST'; message: string };
 
 export type CreateTableResult =
   | { ok: true; tableId: string; runtime: TableRuntime }
   | { ok: false; code: 'INVALID_TABLE_CONFIG' | 'INTERNAL_ERROR'; message: string };
+
+type JoinMutationValue = {
+  runtime: TableRuntime;
+  response: ServerTableJoined;
+};
 
 export class TableLifecycleService {
   constructor(private readonly tables: TableRegistry, private readonly runtimes: Map<string, TableRuntime>, private readonly store: DurableTableStore | null) {}
@@ -31,18 +36,27 @@ export class TableLifecycleService {
     const runtime = this.runtimes.get(request.tableId);
     const table = this.tables.get(request.tableId);
     if (!runtime || !table) return { ok: false, code: 'TABLE_NOT_FOUND', message: 'Table not found' };
-    return runtime.mutateLifecycle(request.requestId, () => {
+
+    return runtime.mutateLifecycle<JoinMutationValue>(request.requestId, () => {
       if (table.state.players.some((player) => player.playerId === playerId)) return { ok: false, code: 'ALREADY_SEATED', message: 'Player is already seated' } as const;
       if (table.state.players.length >= table.state.maxPlayers) return { ok: false, code: 'TABLE_FULL', message: 'Table is full' } as const;
       const seat = request.seat ?? this.firstOpenSeat(table.state.players.map((player) => player.seat), table.state.maxPlayers);
       if (seat === null || seat < 0 || seat >= table.state.maxPlayers || table.state.players.some((player) => player.seat === seat)) return { ok: false, code: 'SEAT_OCCUPIED', message: 'Seat is occupied or invalid' } as const;
       table.seatPlayer(playerId, seat, this.startingStackFor(table));
       if (table.state.players.filter((player) => player.stack > 0).length >= 2 && (table.state.street === 'WAITING' || table.state.street === 'HAND_COMPLETE')) table.startHand();
-      return { ok: true, value: { runtime, response: { type: 'TABLE_JOINED', protocolVersion: 1, requestId: request.requestId, tableId: table.state.tableId, sequence: 0 } } as const };
+      return {
+        runtime,
+        response: {
+          type: 'TABLE_JOINED',
+          protocolVersion: 1,
+          requestId: request.requestId,
+          tableId: table.state.tableId,
+          sequence: 0,
+        },
+      };
     }).then((result) => {
       if (!result.ok) return result;
-      const response = result.value.response;
-      return { ok: true, runtime: result.value.runtime, response: { ...response, sequence: result.sequence } };
+      return { ok: true, runtime: result.value.runtime, response: { ...result.value.response, sequence: result.sequence } };
     });
   }
 

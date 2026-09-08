@@ -31,18 +31,19 @@ export class TableLifecycleService {
     const runtime = this.runtimes.get(request.tableId);
     const table = this.tables.get(request.tableId);
     if (!runtime || !table) return { ok: false, code: 'TABLE_NOT_FOUND', message: 'Table not found' };
-    if (table.state.players.some((player) => player.playerId === playerId)) return { ok: false, code: 'ALREADY_SEATED', message: 'Player is already seated' };
-    if (table.state.players.length >= table.state.maxPlayers) return { ok: false, code: 'TABLE_FULL', message: 'Table is full' };
-    const seat = request.seat ?? this.firstOpenSeat(table.state.players.map((player) => player.seat), table.state.maxPlayers);
-    if (seat === null || table.state.players.some((player) => player.seat === seat)) return { ok: false, code: 'SEAT_OCCUPIED', message: 'Seat is occupied or invalid' };
-    try {
+    return runtime.mutateLifecycle(request.requestId, () => {
+      if (table.state.players.some((player) => player.playerId === playerId)) return { ok: false, code: 'ALREADY_SEATED', message: 'Player is already seated' } as const;
+      if (table.state.players.length >= table.state.maxPlayers) return { ok: false, code: 'TABLE_FULL', message: 'Table is full' } as const;
+      const seat = request.seat ?? this.firstOpenSeat(table.state.players.map((player) => player.seat), table.state.maxPlayers);
+      if (seat === null || seat < 0 || seat >= table.state.maxPlayers || table.state.players.some((player) => player.seat === seat)) return { ok: false, code: 'SEAT_OCCUPIED', message: 'Seat is occupied or invalid' } as const;
       table.seatPlayer(playerId, seat, this.startingStackFor(table));
       if (table.state.players.filter((player) => player.stack > 0).length >= 2 && (table.state.street === 'WAITING' || table.state.street === 'HAND_COMPLETE')) table.startHand();
-      await runtime.ensureActionDeadlinePersisted();
-      return { ok: true, runtime, response: { type: 'TABLE_JOINED', protocolVersion: 1, requestId: request.requestId, tableId: table.state.tableId, sequence: runtime.getSequence() } };
-    } catch (error) {
-      return { ok: false, code: 'INTERNAL_ERROR', message: error instanceof Error ? error.message : 'Player could not join table' };
-    }
+      return { ok: true, value: { runtime, response: { type: 'TABLE_JOINED', protocolVersion: 1, requestId: request.requestId, tableId: table.state.tableId, sequence: 0 } } as const };
+    }).then((result) => {
+      if (!result.ok) return result;
+      const response = result.value.response;
+      return { ok: true, runtime: result.value.runtime, response: { ...response, sequence: result.sequence } };
+    });
   }
 
   list() { return this.tables.list().map((table) => ({ tableId: table.state.tableId, maxPlayers: table.state.maxPlayers, seatedPlayers: table.state.players.length, smallBlind: table.state.smallBlind, bigBlind: table.state.bigBlind, street: table.state.street, handId: table.state.handId })); }

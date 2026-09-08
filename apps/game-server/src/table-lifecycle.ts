@@ -17,11 +17,8 @@ export type LeaveTableResult =
 
 type JoinMutationValue = { runtime: TableRuntime; response: ServerTableJoined };
 type LeaveMutationValue = { runtime: TableRuntime; response: ServerTableLeft };
-type LifecycleFailure = Readonly<{ ok: false; code: string; message: string }>;
-type JoinFailure = Readonly<{ ok: false; code: JoinMutationFailureCode; message: string }>;
-type LeaveFailure = Readonly<{ ok: false; code: LeaveMutationFailureCode; message: string }>;
-type JoinMutationFailureCode = 'TABLE_NOT_FOUND' | 'TABLE_FULL' | 'ALREADY_SEATED' | 'SEAT_OCCUPIED' | 'INVALID_TABLE_CONFIG' | 'INTERNAL_ERROR' | 'DUPLICATE_REQUEST';
-type LeaveMutationFailureCode = 'TABLE_NOT_FOUND' | 'NOT_SEATED' | 'CANNOT_LEAVE_DURING_HAND' | 'INTERNAL_ERROR' | 'DUPLICATE_REQUEST';
+type JoinFailure = Readonly<{ ok: false; code: 'TABLE_NOT_FOUND' | 'TABLE_FULL' | 'ALREADY_SEATED' | 'SEAT_OCCUPIED' | 'INVALID_TABLE_CONFIG' | 'INTERNAL_ERROR' | 'DUPLICATE_REQUEST'; message: string }>;
+type LeaveFailure = Readonly<{ ok: false; code: 'TABLE_NOT_FOUND' | 'NOT_SEATED' | 'CANNOT_LEAVE_DURING_HAND' | 'INTERNAL_ERROR' | 'DUPLICATE_REQUEST'; message: string }>;
 
 export class TableLifecycleService {
   constructor(private readonly tables: TableRegistry, private readonly runtimes: Map<string, TableRuntime>, private readonly store: DurableTableStore | null) {}
@@ -53,8 +50,8 @@ export class TableLifecycleService {
       if (table.state.players.filter((player) => player.stack > 0).length >= 2 && (table.state.street === 'WAITING' || table.state.street === 'HAND_COMPLETE')) table.startHand();
       return { runtime, response: { type: 'TABLE_JOINED', protocolVersion: 1, requestId: request.requestId, tableId: table.state.tableId, sequence: 0 } } satisfies JoinMutationValue;
     }).then((result) => {
-      if (!result.ok) return result as LeaveFailure;
-      return { ok: true, runtime: result.value.runtime, response: { ...result.value.response, sequence: result.sequence } } satisfies LeaveTableResult;
+      if (!result.ok) return result as LifecycleResult;
+      return { ok: true, runtime: result.value.runtime, response: { ...result.value.response, sequence: result.sequence } } satisfies LifecycleResult;
     });
   }
 
@@ -69,7 +66,7 @@ export class TableLifecycleService {
       table.removePlayer(playerId);
       return { runtime, response: { type: 'TABLE_LEFT', protocolVersion: 1, requestId: request.requestId, tableId: table.state.tableId, sequence: 0 } } satisfies LeaveMutationValue;
     }).then((result) => {
-      if (!result.ok) return result as LeaveFailure;
+      if (!result.ok) return result as LeaveTableResult;
       return { ok: true, runtime: result.value.runtime, response: { ...result.value.response, sequence: result.sequence } } satisfies LeaveTableResult;
     });
   }

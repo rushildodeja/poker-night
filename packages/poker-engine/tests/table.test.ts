@@ -15,6 +15,33 @@ describe('PokerTable', () => {
     expect(table.state.events.map((event) => event.type)).toContain('CARDS_DEALT');
   });
 
+  it('removes a seated player only when the table is between hands', () => {
+    const table = new PokerTable('leave-before-start', 5, 10, 2);
+    table.seatPlayer('alice', 0, 100);
+    expect(table.state.street).toBe('WAITING');
+
+    table.removePlayer('alice');
+
+    expect(table.state.players).toHaveLength(0);
+    expect(table.state.events.at(-1)?.type).toBe('PLAYER_LEFT');
+    expect(table.state.events.at(-1)?.handId).toBe('');
+  });
+
+  it('rejects removing a player while a hand is in progress', () => {
+    const table = new PokerTable('leave-during-hand', 5, 10, 2);
+    table.seatPlayer('alice', 0, 100);
+    table.seatPlayer('bob', 1, 100);
+    table.startHand();
+
+    expect(() => table.removePlayer('alice')).toThrow('Cannot leave during a hand');
+    expect(table.state.players).toHaveLength(2);
+  });
+
+  it('rejects removing a player who is not seated', () => {
+    const table = new PokerTable('leave-missing', 5, 10, 2);
+    expect(() => table.removePlayer('missing')).toThrow('Player is not seated');
+  });
+
   it('rejects actions from the wrong player', () => {
     const table = new PokerTable('table-2', 5, 10, 2);
     table.seatPlayer('alice', 0, 100);

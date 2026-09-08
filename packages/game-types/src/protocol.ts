@@ -44,6 +44,13 @@ export type ClientJoinTableRequest = Readonly<{
   seat?: number;
 }>;
 
+export type ClientLeaveTableRequest = Readonly<{
+  type: 'LEAVE_TABLE';
+  protocolVersion: ProtocolVersion;
+  requestId: string;
+  tableId: string;
+}>;
+
 export type ServerActionAccepted = Readonly<{
   type: 'ACTION_ACCEPTED';
   protocolVersion: ProtocolVersion;
@@ -101,6 +108,14 @@ export type ServerTableJoined = Readonly<{
   sequence: number;
 }>;
 
+export type ServerTableLeft = Readonly<{
+  type: 'TABLE_LEFT';
+  protocolVersion: ProtocolVersion;
+  requestId: string;
+  tableId: string;
+  sequence: number;
+}>;
+
 export type ServerErrorCode =
   | 'BAD_REQUEST'
   | 'STALE_HAND'
@@ -116,6 +131,8 @@ export type ServerErrorCode =
   | 'ALREADY_SEATED'
   | 'SEAT_OCCUPIED'
   | 'INVALID_TABLE_CONFIG'
+  | 'CANNOT_LEAVE_DURING_HAND'
+  | 'NOT_SEATED'
   | 'INTERNAL_ERROR';
 
 export type ServerError = Readonly<{
@@ -165,8 +182,8 @@ export type PrivateTableSnapshot = TableSnapshot & Readonly<{
 }>;
 
 export type ServerEvent = Readonly<{
-  type: 'TABLE_SNAPSHOT' | 'ACTION_ACCEPTED' | 'SESSION_READY' | 'RESUME_ACCEPTED' | 'TABLE_LIST' | 'TABLE_CREATED' | 'TABLE_JOINED' | 'ERROR';
+  type: 'TABLE_SNAPSHOT' | 'ACTION_ACCEPTED' | 'SESSION_READY' | 'RESUME_ACCEPTED' | 'TABLE_LIST' | 'TABLE_CREATED' | 'TABLE_JOINED' | 'TABLE_LEFT' | 'ERROR';
   protocolVersion: ProtocolVersion;
   sequence: number;
-  payload: TableSnapshot | PrivateTableSnapshot | ServerActionAccepted | ServerSessionReady | ServerResumeAccepted | ServerTableList | ServerTableCreated | ServerTableJoined | ServerError;
+  payload: TableSnapshot | PrivateTableSnapshot | ServerActionAccepted | ServerSessionReady | ServerResumeAccepted | ServerTableList | ServerTableCreated | ServerTableJoined | ServerTableLeft | ServerError;
 }>;

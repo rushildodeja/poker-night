@@ -31,6 +31,51 @@ describe('TableLifecycleService', () => {
     expect(joined.runtime.getSequence()).toBe(1);
   });
 
+  it('allows a seated player to leave between hands and persists the lifecycle event', async () => {
+    const store = new InMemoryDurableTableStore();
+    const registry = new TableRegistry();
+    const runtimes = new Map();
+    const service = new TableLifecycleService(registry, runtimes, store);
+    const created = await service.create({ type: 'CREATE_TABLE', protocolVersion: 1, requestId: 'create-leave', smallBlind: 50, bigBlind: 100, maxPlayers: 9, startingStack: 10000 }, 'p1');
+    if (!created.ok) throw new Error(`create failed: ${created.message}`);
+
+    const left = await service.leave({ type: 'LEAVE_TABLE', protocolVersion: 1, requestId: 'leave-1', tableId: created.tableId }, 'p1');
+
+    expect(left.ok).toBe(true);
+    if (!left.ok) return;
+    expect(left.response.type).toBe('TABLE_LEFT');
+    expect(left.runtime.table.state.players).toHaveLength(0);
+    expect(left.runtime.getSequence()).toBe(1);
+    expect(left.runtime.table.state.events.at(-1)?.type).toBe('PLAYER_LEFT');
+    expect((await store.listEventsAfter(created.tableId, 0)).some((event) => event.requestId === 'leave-1' && event.event.type === 'PLAYER_LEFT')).toBe(true);
+  });
+
+  it('rejects leaving while a hand is in progress without mutating state', async () => {
+    const registry = new TableRegistry();
+    const runtimes = new Map();
+    const service = new TableLifecycleService(registry, runtimes, null);
+    const created = await service.create({ type: 'CREATE_TABLE', protocolVersion: 1, requestId: 'create-hand-leave', smallBlind: 50, bigBlind: 100, maxPlayers: 2, startingStack: 10000 }, 'p1');
+    if (!created.ok) throw new Error(`create failed: ${created.message}`);
+    const joined = await service.join({ type: 'JOIN_TABLE', protocolVersion: 1, requestId: 'join-hand-leave', tableId: created.tableId }, 'p2');
+    if (!joined.ok) throw new Error(`join failed: ${joined.message}`);
+    const before = structuredClone(joined.runtime.table.checkpoint());
+
+    const left = await service.leave({ type: 'LEAVE_TABLE', protocolVersion: 1, requestId: 'leave-hand', tableId: created.tableId }, 'p1');
+
+    expect(left).toEqual({ ok: false, code: 'CANNOT_LEAVE_DURING_HAND', message: 'A player cannot leave while a hand is in progress; disconnects remain seated until the hand completes' });
+    expect(joined.runtime.table.checkpoint()).toEqual(before);
+  });
+
+  it('rejects leaving for a player who is not seated', async () => {
+    const registry = new TableRegistry();
+    const runtimes = new Map();
+    const service = new TableLifecycleService(registry, runtimes, null);
+    const created = await service.create({ type: 'CREATE_TABLE', protocolVersion: 1, requestId: 'create-missing-leave', smallBlind: 50, bigBlind: 100, maxPlayers: 2, startingStack: 10000 }, 'p1');
+    if (!created.ok) throw new Error(`create failed: ${created.message}`);
+
+    await expect(service.leave({ type: 'LEAVE_TABLE', protocolVersion: 1, requestId: 'leave-missing', tableId: created.tableId }, 'p2')).resolves.toEqual({ ok: false, code: 'NOT_SEATED', message: 'Player is not seated at this table' });
+  });
+
   it('rejects duplicate seating and full tables', async () => {
     const registry = new TableRegistry();
     const runtimes = new Map();

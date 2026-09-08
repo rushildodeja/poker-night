@@ -50,6 +50,15 @@ export class PokerTable {
     this.recordEvent({ type: 'PLAYER_SEATED', playerId });
   }
 
+  removePlayer(playerId: string): void {
+    if (this.state.street !== 'WAITING' && this.state.street !== 'HAND_COMPLETE') throw new Error('Cannot leave during a hand');
+    const index = this.state.players.findIndex((player) => player.playerId === playerId);
+    if (index < 0) throw new Error('Player is not seated');
+    this.state.players.splice(index, 1);
+    this.state.currentPlayerId = null;
+    this.recordEvent({ type: 'PLAYER_LEFT', playerId });
+  }
+
   startHand(): void {
     if (this.state.street !== 'WAITING' && this.state.street !== 'HAND_COMPLETE') throw new Error('Hand already in progress');
     const funded = this.state.players.filter((p) => p.stack > 0).sort((a, b) => a.seat - b.seat);
@@ -88,5 +97,5 @@ export class PokerTable {
   private nextActive(seat: number): PlayerState { const players = this.activePlayers().sort((a, b) => a.seat - b.seat); return players.find((p) => p.seat > seat) ?? players[0]!; }
   private nextActionableId(seat: number): string | null { const players = this.actionablePlayers().sort((a, b) => a.seat - b.seat); if (!players.length) return null; return (players.find((p) => p.seat > seat) ?? players[0]!).playerId; }
   private playerSeat(playerId: string | null): number { if (!playerId) return this.state.dealerButton; return this.state.players.find((p) => p.playerId === playerId)?.seat ?? this.state.dealerButton; }
-  private recordEvent(event: Omit<TableEvent, 'handId' | 'timestamp'>): void { if (!this.state.handId) return; this.state.events.push({ ...event, handId: this.state.handId, timestamp: Date.now() }); }
+  private recordEvent(event: Omit<TableEvent, 'handId' | 'timestamp'>): void { this.state.events.push({ ...event, handId: this.state.handId ?? '', timestamp: Date.now() }); }
 }

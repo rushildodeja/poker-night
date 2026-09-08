@@ -19,14 +19,10 @@ export type PlayerState = {
   seat: number;
   stack: number;
   holeCards: Card[];
-  /** Chips committed during the current betting street. */
   currentBet: number;
-  /** Chips committed during the whole hand. */
   totalContribution: number;
   status: PlayerStatus;
-  /** True after this player has acted since the latest full raise. */
   hasActed: boolean;
-  /** False after acting until a full raise reopens this player's betting rights. */
   canRaise: boolean;
 };
 
@@ -45,6 +41,7 @@ export type TableEvent = Readonly<{
   type:
     | 'HAND_CREATED'
     | 'PLAYER_SEATED'
+    | 'PLAYER_LEFT'
     | 'BLINDS_POSTED'
     | 'CARDS_DEALT'
     | 'PLAYER_ACTION'
@@ -72,9 +69,7 @@ export type TableState = {
   communityCards: Card[];
   street: Street;
   currentPlayerId: string | null;
-  /** Highest current-street wager that active players must match. */
   currentBet: number;
-  /** Size of the most recent full raise; also the minimum full raise size. */
   minRaise: number;
   pots: PotState[];
   actionDeadline: number | null;
@@ -85,6 +80,5 @@ export type TableState = {
 export type Action = Readonly<{
   playerId: string;
   type: ActionType;
-  /** For BET/RAISE this is the player's desired total current-street wager. */
   amount?: number;
 }>;

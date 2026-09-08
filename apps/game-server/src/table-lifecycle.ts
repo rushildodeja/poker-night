@@ -1,4 +1,4 @@
-import type { ClientCreateTableRequest, ClientJoinTableRequest, ServerTableJoined } from '@poker-night/game-types';
+import type { ClientCreateTableRequest, ClientJoinTableRequest, ClientLeaveTableRequest, ServerTableJoined, ServerTableLeft } from '@poker-night/game-types';
 import { TableRegistry } from './table-registry.js';
 import { TableRuntime } from './table-runtime.js';
 import type { DurableTableStore } from './durable-store.js';
@@ -11,10 +11,14 @@ export type CreateTableResult =
   | { ok: true; tableId: string; runtime: TableRuntime }
   | { ok: false; code: 'INVALID_TABLE_CONFIG' | 'INTERNAL_ERROR'; message: string };
 
-type JoinMutationValue = {
-  runtime: TableRuntime;
-  response: ServerTableJoined;
-};
+export type LeaveTableResult =
+  | { ok: true; runtime: TableRuntime; response: ServerTableLeft }
+  | { ok: false; code: 'TABLE_NOT_FOUND' | 'NOT_SEATED' | 'CANNOT_LEAVE_DURING_HAND' | 'INTERNAL_ERROR' | 'DUPLICATE_REQUEST'; message: string };
+
+type JoinMutationValue = { runtime: TableRuntime; response: ServerTableJoined };
+type LeaveMutationValue = { runtime: TableRuntime; response: ServerTableLeft };
+
+type LifecycleFailure = { ok: false; code: string; message: string };
 
 export class TableLifecycleService {
   constructor(private readonly tables: TableRegistry, private readonly runtimes: Map<string, TableRuntime>, private readonly store: DurableTableStore | null) {}
@@ -46,13 +50,26 @@ export class TableLifecycleService {
       if (table.state.players.filter((player) => player.stack > 0).length >= 2 && (table.state.street === 'WAITING' || table.state.street === 'HAND_COMPLETE')) table.startHand();
       return {
         runtime,
-        response: {
-          type: 'TABLE_JOINED',
-          protocolVersion: 1,
-          requestId: request.requestId,
-          tableId: table.state.tableId,
-          sequence: 0,
-        },
+        response: { type: 'TABLE_JOINED', protocolVersion: 1, requestId: request.requestId, tableId: table.state.tableId, sequence: 0 },
+      };
+    }).then((result) => {
+      if (!result.ok) return result;
+      return { ok: true, runtime: result.value.runtime, response: { ...result.value.response, sequence: result.sequence } };
+    });
+  }
+
+  async leave(request: ClientLeaveTableRequest, playerId: string): Promise<LeaveTableResult> {
+    const runtime = this.runtimes.get(request.tableId);
+    const table = this.tables.get(request.tableId);
+    if (!runtime || !table) return { ok: false, code: 'TABLE_NOT_FOUND', message: 'Table not found' };
+
+    return runtime.mutateLifecycle<LeaveMutationValue>(request.requestId, () => {
+      if (!table.state.players.some((player) => player.playerId === playerId)) return { ok: false, code: 'NOT_SEATED', message: 'Player is not seated at this table' } as const;
+      if (table.state.street !== 'WAITING' && table.state.street !== 'HAND_COMPLETE') return { ok: false, code: 'CANNOT_LEAVE_DURING_HAND', message: 'A player cannot leave while a hand is in progress; disconnects remain seated until the hand completes' } as const;
+      table.removePlayer(playerId);
+      return {
+        runtime,
+        response: { type: 'TABLE_LEFT', protocolVersion: 1, requestId: request.requestId, tableId: table.state.tableId, sequence: 0 },
       };
     }).then((result) => {
       if (!result.ok) return result;

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { parseClientActionRequest, parseClientCreateTableRequest, parseClientJoinTableRequest, parseClientListTablesRequest, parseClientResumeRequest, toPrivateSnapshot } from '@poker-night/game-types';
+import { parseClientActionRequest, parseClientCreateTableRequest, parseClientJoinTableRequest, parseClientLeaveTableRequest, parseClientListTablesRequest, parseClientResumeRequest, toPrivateSnapshot } from '@poker-night/game-types';
 import { ConnectionManager } from './connection-manager.js';
 import { ConnectionGuard } from './connection-guard.js';
 import { SessionManager } from './session-manager.js';
@@ -55,7 +55,7 @@ server.on('connection', (socket, request) => {
     let requestPayload: unknown;
     try { requestPayload = JSON.parse(raw.toString()); } catch { sendError(socket, 'BAD_REQUEST', 'Message must be valid JSON'); return; }
     if (!active) {
-      if (!sessions.activate(sessionId)) { sendError(socket, 'INVALID_SESSION', 'Session is no longer valid'); socket.close(1008, 'Invalid session'); return; }
+      if (sessions.activate(sessionId) === null) { sendError(socket, 'INVALID_SESSION', 'Session is no longer valid'); socket.close(1008, 'Invalid session'); return; }
       active = true;
     }
     const type = requestPayload && typeof requestPayload === 'object' ? (requestPayload as Record<string, unknown>).type : undefined;
@@ -78,6 +78,13 @@ server.on('connection', (socket, request) => {
       const result = await lifecycle.join(join, playerId);
       if (!result.ok) { sendError(socket, result.code, result.message, join.requestId); return; }
       timeoutCoordinator.arm(result.runtime); send(socket, { type: 'TABLE_JOINED', protocolVersion: 1, sequence: result.runtime.getSequence(), payload: result.response }); broadcastRuntime(result.runtime); return;
+    }
+    if (type === 'LEAVE_TABLE') {
+      let leave;
+      try { leave = parseClientLeaveTableRequest(requestPayload); } catch (error) { sendError(socket, 'BAD_REQUEST', error instanceof Error ? error.message : 'Invalid leave request'); return; }
+      const result = await lifecycle.leave(leave, playerId);
+      if (!result.ok) { sendError(socket, result.code, result.message, leave.requestId); return; }
+      timeoutCoordinator.arm(result.runtime); send(socket, { type: 'TABLE_LEFT', protocolVersion: 1, sequence: result.runtime.getSequence(), payload: result.response }); broadcastRuntime(result.runtime); return;
     }
     if (type === 'RESUME') {
       let resume;

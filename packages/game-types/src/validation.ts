@@ -1,5 +1,5 @@
 import type { ActionType } from '@poker-night/poker-engine';
-import type { ClientActionRequest, ClientCreateTableRequest, ClientJoinTableRequest, ClientListTablesRequest, ClientResumeRequest } from './protocol.js';
+import type { ClientActionRequest, ClientCreateTableRequest, ClientJoinTableRequest, ClientLeaveTableRequest, ClientListTablesRequest, ClientResumeRequest } from './protocol.js';
 
 const ACTIONS: readonly ActionType[] = ['CHECK', 'BET', 'CALL', 'RAISE', 'FOLD', 'ALL_IN'];
 function isNonEmptyString(value: unknown): value is string { return typeof value === 'string' && value.trim().length > 0; }
@@ -32,4 +32,9 @@ export function parseClientJoinTableRequest(input: unknown): ClientJoinTableRequ
   if (value.type !== 'JOIN_TABLE') throw new Error('Invalid join table request type'); if (value.protocolVersion !== 1) throw new Error('Unsupported protocol version'); if (!isNonEmptyString(value.requestId)) throw new Error('requestId is required'); if (!isNonEmptyString(value.tableId)) throw new Error('tableId is required');
   if (value.seat !== undefined && (!Number.isInteger(value.seat) || (value.seat as number) < 0 || (value.seat as number) > 8)) throw new Error('Invalid seat');
   return { type: 'JOIN_TABLE', protocolVersion: 1, requestId: value.requestId, tableId: value.tableId, ...(value.seat === undefined ? {} : { seat: value.seat as number }) };
+}
+export function parseClientLeaveTableRequest(input: unknown): ClientLeaveTableRequest {
+  if (!input || typeof input !== 'object') throw new Error('Leave table request must be an object'); const value = input as Record<string, unknown>;
+  if (value.type !== 'LEAVE_TABLE') throw new Error('Invalid leave table request type'); if (value.protocolVersion !== 1) throw new Error('Unsupported protocol version'); if (!isNonEmptyString(value.requestId)) throw new Error('requestId is required'); if (!isNonEmptyString(value.tableId)) throw new Error('tableId is required');
+  return { type: 'LEAVE_TABLE', protocolVersion: 1, requestId: value.requestId, tableId: value.tableId };
 }

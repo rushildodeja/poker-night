@@ -9,6 +9,10 @@ import type { ActionTimeout } from './action-timer.js';
 const REQUEST_REPLAY_WINDOW = 10_000;
 const DEFAULT_ACTION_TIMEOUT_MS = 30_000;
 type ProcessedRequest = { sequence: number; processedAt: number };
+export type LifecycleMutationFailure = Readonly<{ code: string; message: string }>;
+export type LifecycleMutationResult<T> =
+  | Readonly<{ ok: true; value: T; sequence: number }>
+  | Readonly<{ ok: false; code: string; message: string }>;
 
 export class TableRuntime {
   private sequence = 0;
@@ -75,6 +79,48 @@ export class TableRuntime {
     });
   }
 
+  /**
+   * Serializes non-player lifecycle changes (seat/join/create setup) through
+   * the same table queue and durability boundary as poker actions.
+   */
+  mutateLifecycle<T>(requestId: string, mutation: () => T | LifecycleMutationResult<T>): Promise<LifecycleMutationResult<T>> {
+    return this.queue.enqueue(async () => {
+      this.pruneProcessed();
+      const previous = this.processed.get(requestId);
+      if (previous) return { ok: false, code: 'DUPLICATE_REQUEST', message: `Request was already processed at sequence ${previous.sequence}` };
+      if (this.store) {
+        const persisted = await this.store.findRequest(this.table.state.tableId, requestId);
+        if (persisted !== null) {
+          this.processed.set(requestId, { sequence: persisted, processedAt: Date.now() });
+          return { ok: false, code: 'DUPLICATE_REQUEST', message: `Request was already processed at sequence ${persisted}` };
+        }
+      }
+
+      const before = this.table.checkpoint();
+      try {
+        const mutationResult = mutation();
+        if (isLifecycleFailure(mutationResult)) {
+          this.table.restore(before);
+          return mutationResult;
+        }
+        const value = mutationResult as T;
+        this.armDeadlineIfNeeded(Date.now());
+        const nextSequence = this.sequence + 1;
+        if (this.store) {
+          const events = this.table.state.events.slice(before.state.events.length) as TableEvent[];
+          if (events.length === 0) throw new Error('Lifecycle mutation produced no durable event');
+          await this.store.persistMutation({ tableId: this.table.state.tableId, sequence: nextSequence, handId: this.table.state.handId ?? '', requestId, events, checkpoint: this.table.checkpoint(), savedAt: Date.now() });
+        }
+        this.sequence = nextSequence;
+        this.processed.set(requestId, { sequence: this.sequence, processedAt: Date.now() });
+        return { ok: true, value, sequence: this.sequence };
+      } catch (error) {
+        this.table.restore(before);
+        return { ok: false, code: 'INTERNAL_ERROR', message: error instanceof Error ? error.message : 'Lifecycle mutation could not be committed' };
+      }
+    });
+  }
+
   async idle(): Promise<void> { await this.queue.idle(); }
 
   private async applySerialized(command: AuthenticatedActionCommand): Promise<ServerActionAccepted | CommandRejection> {
@@ -124,4 +170,8 @@ export class TableRuntime {
 
   private pruneProcessed(): void { const cutoff = Date.now() - REQUEST_REPLAY_WINDOW; for (const [requestId, entry] of this.processed) if (entry.processedAt < cutoff) this.processed.delete(requestId); }
   private reject(command: Pick<AuthenticatedActionCommand, 'requestId'>, code: CommandRejection['code'], message: string): CommandRejection { return { requestId: command.requestId, code, message }; }
+}
+
+function isLifecycleFailure<T>(value: T | LifecycleMutationResult<T>): value is Extract<LifecycleMutationResult<T>, { ok: false }> {
+  return typeof value === 'object' && value !== null && 'ok' in value && value.ok === false;
 }

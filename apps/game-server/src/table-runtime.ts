@@ -9,10 +9,10 @@ import type { ActionTimeout } from './action-timer.js';
 const REQUEST_REPLAY_WINDOW = 10_000;
 const DEFAULT_ACTION_TIMEOUT_MS = 30_000;
 type ProcessedRequest = { sequence: number; processedAt: number };
-export type LifecycleMutationFailure = Readonly<{ code: string; message: string }>;
+type LifecycleFailure = Readonly<{ ok: false; code: string; message: string }>;
 export type LifecycleMutationResult<T> =
   | Readonly<{ ok: true; value: T; sequence: number }>
-  | Readonly<{ ok: false; code: string; message: string }>;
+  | LifecycleFailure;
 
 export class TableRuntime {
   private sequence = 0;
@@ -79,11 +79,7 @@ export class TableRuntime {
     });
   }
 
-  /**
-   * Serializes non-player lifecycle changes (seat/join/create setup) through
-   * the same table queue and durability boundary as poker actions.
-   */
-  mutateLifecycle<T>(requestId: string, mutation: () => T | LifecycleMutationResult<T>): Promise<LifecycleMutationResult<T>> {
+  mutateLifecycle<T>(requestId: string, mutation: () => T | LifecycleFailure): Promise<LifecycleMutationResult<T>> {
     return this.queue.enqueue(async () => {
       this.pruneProcessed();
       const previous = this.processed.get(requestId);
@@ -103,8 +99,6 @@ export class TableRuntime {
           this.table.restore(before);
           return mutationResult;
         }
-        const value = mutationResult as T;
-        this.armDeadlineIfNeeded(Date.now());
         const nextSequence = this.sequence + 1;
         if (this.store) {
           const events = this.table.state.events.slice(before.state.events.length) as TableEvent[];
@@ -113,7 +107,7 @@ export class TableRuntime {
         }
         this.sequence = nextSequence;
         this.processed.set(requestId, { sequence: this.sequence, processedAt: Date.now() });
-        return { ok: true, value, sequence: this.sequence };
+        return { ok: true, value: mutationResult, sequence: this.sequence };
       } catch (error) {
         this.table.restore(before);
         return { ok: false, code: 'INTERNAL_ERROR', message: error instanceof Error ? error.message : 'Lifecycle mutation could not be committed' };
@@ -172,6 +166,6 @@ export class TableRuntime {
   private reject(command: Pick<AuthenticatedActionCommand, 'requestId'>, code: CommandRejection['code'], message: string): CommandRejection { return { requestId: command.requestId, code, message }; }
 }
 
-function isLifecycleFailure<T>(value: T | LifecycleMutationResult<T>): value is Extract<LifecycleMutationResult<T>, { ok: false }> {
-  return typeof value === 'object' && value !== null && 'ok' in value && value.ok === false;
+function isLifecycleFailure(value: unknown): value is LifecycleFailure {
+  return typeof value === 'object' && value !== null && 'ok' in value && (value as { ok?: unknown }).ok === false;
 }

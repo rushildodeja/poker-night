@@ -9,8 +9,8 @@ describe('TableLifecycleService', () => {
     const runtimes = new Map();
     const service = new TableLifecycleService(registry, runtimes, new InMemoryDurableTableStore());
     const result = await service.create({ type: 'CREATE_TABLE', protocolVersion: 1, requestId: 'create-1', smallBlind: 50, bigBlind: 100, maxPlayers: 9, startingStack: 10000 }, 'p1');
-    expect('ok' in result).toBe(false);
-    if ('ok' in result) return;
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(`create failed: ${result.message}`);
     expect(result.runtime.table.state.players).toHaveLength(1);
     expect(result.runtime.table.state.players[0]?.playerId).toBe('p1');
     expect(registry.has(result.tableId)).toBe(true);
@@ -21,7 +21,7 @@ describe('TableLifecycleService', () => {
     const runtimes = new Map();
     const service = new TableLifecycleService(registry, runtimes, new InMemoryDurableTableStore());
     const created = await service.create({ type: 'CREATE_TABLE', protocolVersion: 1, requestId: 'create-2', smallBlind: 50, bigBlind: 100, maxPlayers: 9, startingStack: 10000 }, 'p1');
-    if ('ok' in created) throw new Error('create failed');
+    if (!created.ok) throw new Error(`create failed: ${created.message}`);
     const joined = await service.join({ type: 'JOIN_TABLE', protocolVersion: 1, requestId: 'join-1', tableId: created.tableId }, 'p2');
     expect(joined.ok).toBe(true);
     if (!joined.ok) return;
@@ -35,7 +35,7 @@ describe('TableLifecycleService', () => {
     const runtimes = new Map();
     const service = new TableLifecycleService(registry, runtimes, null);
     const created = await service.create({ type: 'CREATE_TABLE', protocolVersion: 1, requestId: 'create-3', smallBlind: 50, bigBlind: 100, maxPlayers: 2, startingStack: 10000 }, 'p1');
-    if ('ok' in created) throw new Error('create failed');
+    if (!created.ok) throw new Error(`create failed: ${created.message}`);
     const duplicate = await service.join({ type: 'JOIN_TABLE', protocolVersion: 1, requestId: 'join-dup', tableId: created.tableId }, 'p1');
     expect(duplicate).toEqual({ ok: false, code: 'ALREADY_SEATED', message: 'Player is already seated' });
     const first = await service.join({ type: 'JOIN_TABLE', protocolVersion: 1, requestId: 'join-4', tableId: created.tableId }, 'p2');

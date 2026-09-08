@@ -17,8 +17,11 @@ export type LeaveTableResult =
 
 type JoinMutationValue = { runtime: TableRuntime; response: ServerTableJoined };
 type LeaveMutationValue = { runtime: TableRuntime; response: ServerTableLeft };
-
-type LifecycleFailure = { ok: false; code: string; message: string };
+type LifecycleFailure = Readonly<{ ok: false; code: string; message: string }>;
+type JoinFailure = Readonly<{ ok: false; code: JoinMutationFailureCode; message: string }>;
+type LeaveFailure = Readonly<{ ok: false; code: LeaveMutationFailureCode; message: string }>;
+type JoinMutationFailureCode = 'TABLE_NOT_FOUND' | 'TABLE_FULL' | 'ALREADY_SEATED' | 'SEAT_OCCUPIED' | 'INVALID_TABLE_CONFIG' | 'INTERNAL_ERROR' | 'DUPLICATE_REQUEST';
+type LeaveMutationFailureCode = 'TABLE_NOT_FOUND' | 'NOT_SEATED' | 'CANNOT_LEAVE_DURING_HAND' | 'INTERNAL_ERROR' | 'DUPLICATE_REQUEST';
 
 export class TableLifecycleService {
   constructor(private readonly tables: TableRegistry, private readonly runtimes: Map<string, TableRuntime>, private readonly store: DurableTableStore | null) {}
@@ -42,19 +45,16 @@ export class TableLifecycleService {
     if (!runtime || !table) return { ok: false, code: 'TABLE_NOT_FOUND', message: 'Table not found' };
 
     return runtime.mutateLifecycle<JoinMutationValue>(request.requestId, () => {
-      if (table.state.players.some((player) => player.playerId === playerId)) return { ok: false, code: 'ALREADY_SEATED', message: 'Player is already seated' } as const;
-      if (table.state.players.length >= table.state.maxPlayers) return { ok: false, code: 'TABLE_FULL', message: 'Table is full' } as const;
+      if (table.state.players.some((player) => player.playerId === playerId)) return { ok: false, code: 'ALREADY_SEATED', message: 'Player is already seated' } as JoinFailure;
+      if (table.state.players.length >= table.state.maxPlayers) return { ok: false, code: 'TABLE_FULL', message: 'Table is full' } as JoinFailure;
       const seat = request.seat ?? this.firstOpenSeat(table.state.players.map((player) => player.seat), table.state.maxPlayers);
-      if (seat === null || seat < 0 || seat >= table.state.maxPlayers || table.state.players.some((player) => player.seat === seat)) return { ok: false, code: 'SEAT_OCCUPIED', message: 'Seat is occupied or invalid' } as const;
+      if (seat === null || seat < 0 || seat >= table.state.maxPlayers || table.state.players.some((player) => player.seat === seat)) return { ok: false, code: 'SEAT_OCCUPIED', message: 'Seat is occupied or invalid' } as JoinFailure;
       table.seatPlayer(playerId, seat, this.startingStackFor(table));
       if (table.state.players.filter((player) => player.stack > 0).length >= 2 && (table.state.street === 'WAITING' || table.state.street === 'HAND_COMPLETE')) table.startHand();
-      return {
-        runtime,
-        response: { type: 'TABLE_JOINED', protocolVersion: 1, requestId: request.requestId, tableId: table.state.tableId, sequence: 0 },
-      };
+      return { runtime, response: { type: 'TABLE_JOINED', protocolVersion: 1, requestId: request.requestId, tableId: table.state.tableId, sequence: 0 } } satisfies JoinMutationValue;
     }).then((result) => {
-      if (!result.ok) return result;
-      return { ok: true, runtime: result.value.runtime, response: { ...result.value.response, sequence: result.sequence } };
+      if (!result.ok) return result as LeaveFailure;
+      return { ok: true, runtime: result.value.runtime, response: { ...result.value.response, sequence: result.sequence } } satisfies LeaveTableResult;
     });
   }
 
@@ -64,16 +64,13 @@ export class TableLifecycleService {
     if (!runtime || !table) return { ok: false, code: 'TABLE_NOT_FOUND', message: 'Table not found' };
 
     return runtime.mutateLifecycle<LeaveMutationValue>(request.requestId, () => {
-      if (!table.state.players.some((player) => player.playerId === playerId)) return { ok: false, code: 'NOT_SEATED', message: 'Player is not seated at this table' } as const;
-      if (table.state.street !== 'WAITING' && table.state.street !== 'HAND_COMPLETE') return { ok: false, code: 'CANNOT_LEAVE_DURING_HAND', message: 'A player cannot leave while a hand is in progress; disconnects remain seated until the hand completes' } as const;
+      if (!table.state.players.some((player) => player.playerId === playerId)) return { ok: false, code: 'NOT_SEATED', message: 'Player is not seated at this table' } as LeaveFailure;
+      if (table.state.street !== 'WAITING' && table.state.street !== 'HAND_COMPLETE') return { ok: false, code: 'CANNOT_LEAVE_DURING_HAND', message: 'A player cannot leave while a hand is in progress; disconnects remain seated until the hand completes' } as LeaveFailure;
       table.removePlayer(playerId);
-      return {
-        runtime,
-        response: { type: 'TABLE_LEFT', protocolVersion: 1, requestId: request.requestId, tableId: table.state.tableId, sequence: 0 },
-      };
+      return { runtime, response: { type: 'TABLE_LEFT', protocolVersion: 1, requestId: request.requestId, tableId: table.state.tableId, sequence: 0 } } satisfies LeaveMutationValue;
     }).then((result) => {
-      if (!result.ok) return result;
-      return { ok: true, runtime: result.value.runtime, response: { ...result.value.response, sequence: result.sequence } };
+      if (!result.ok) return result as LeaveFailure;
+      return { ok: true, runtime: result.value.runtime, response: { ...result.value.response, sequence: result.sequence } } satisfies LeaveTableResult;
     });
   }
 

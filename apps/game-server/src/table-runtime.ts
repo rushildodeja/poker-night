@@ -9,11 +9,8 @@ import type { ActionTimeout } from './action-timer.js';
 const REQUEST_REPLAY_WINDOW = 10_000;
 const DEFAULT_ACTION_TIMEOUT_MS = 30_000;
 type ProcessedRequest = { sequence: number; processedAt: number };
-type LifecycleFailureCode = 'TABLE_NOT_FOUND' | 'TABLE_FULL' | 'ALREADY_SEATED' | 'SEAT_OCCUPIED' | 'INVALID_TABLE_CONFIG' | 'INTERNAL_ERROR' | 'DUPLICATE_REQUEST';
-type LifecycleFailure = Readonly<{ ok: false; code: LifecycleFailureCode; message: string }>;
-export type LifecycleMutationResult<T> =
-  | Readonly<{ ok: true; value: T; sequence: number }>
-  | LifecycleFailure;
+type LifecycleFailure = Readonly<{ ok: false; code: string; message: string }>;
+export type LifecycleMutationResult<T> = Readonly<{ ok: true; value: T; sequence: number }> | LifecycleFailure;
 
 export class TableRuntime {
   private sequence = 0;
@@ -27,9 +24,7 @@ export class TableRuntime {
     this.actionTimeoutMs = actionTimeoutMs;
   }
 
-  static create(table: PokerTable, store: DurableTableStore | null = null, sequence = 0, actionTimeoutMs = Number(process.env.ACTION_TIMEOUT_MS ?? DEFAULT_ACTION_TIMEOUT_MS)): TableRuntime {
-    return new TableRuntime(table, store, sequence, actionTimeoutMs);
-  }
+  static create(table: PokerTable, store: DurableTableStore | null = null, sequence = 0, actionTimeoutMs = Number(process.env.ACTION_TIMEOUT_MS ?? DEFAULT_ACTION_TIMEOUT_MS)): TableRuntime { return new TableRuntime(table, store, sequence, actionTimeoutMs); }
 
   async initialize(): Promise<void> {
     if (!this.store) return;
@@ -167,6 +162,4 @@ export class TableRuntime {
   private reject(command: Pick<AuthenticatedActionCommand, 'requestId'>, code: CommandRejection['code'], message: string): CommandRejection { return { requestId: command.requestId, code, message }; }
 }
 
-function isLifecycleFailure(value: unknown): value is LifecycleFailure {
-  return typeof value === 'object' && value !== null && 'ok' in value && (value as { ok?: unknown }).ok === false;
-}
+function isLifecycleFailure(value: unknown): value is LifecycleFailure { return typeof value === 'object' && value !== null && 'ok' in value && (value as { ok?: unknown }).ok === false; }
